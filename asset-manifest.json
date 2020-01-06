@@ -1,0 +1,27 @@
+{
+  "files": {
+    "main.css": "/dosir.github.io/static/css/main.64c565d3.chunk.css",
+    "main.js": "/dosir.github.io/static/js/main.06aabee8.chunk.js",
+    "main.js.map": "/dosir.github.io/static/js/main.06aabee8.chunk.js.map",
+    "runtime-main.js": "/dosir.github.io/static/js/runtime-main.b5b4f1b4.js",
+    "runtime-main.js.map": "/dosir.github.io/static/js/runtime-main.b5b4f1b4.js.map",
+    "static/css/2.a212dddb.chunk.css": "/dosir.github.io/static/css/2.a212dddb.chunk.css",
+    "static/js/2.294b4391.chunk.js": "/dosir.github.io/static/js/2.294b4391.chunk.js",
+    "static/js/2.294b4391.chunk.js.map": "/dosir.github.io/static/js/2.294b4391.chunk.js.map",
+    "index.html": "/dosir.github.io/index.html",
+    "precache-manifest.a5b397db092b8f154959a329691c6432.js": "/dosir.github.io/precache-manifest.a5b397db092b8f154959a329691c6432.js",
+    "service-worker.js": "/dosir.github.io/service-worker.js",
+    "static/css/2.a212dddb.chunk.css.map": "/dosir.github.io/static/css/2.a212dddb.chunk.css.map",
+    "static/css/main.64c565d3.chunk.css.map": "/dosir.github.io/static/css/main.64c565d3.chunk.css.map",
+    "static/js/2.294b4391.chunk.js.LICENSE": "/dosir.github.io/static/js/2.294b4391.chunk.js.LICENSE",
+    "static/media/Vazir-Bold.ttf": "/dosir.github.io/static/media/Vazir-Bold.e7425dc1.ttf",
+    "static/media/Vazir.ttf": "/dosir.github.io/static/media/Vazir.2c96154b.ttf"
+  },
+  "entrypoints": [
+    "static/js/runtime-main.b5b4f1b4.js",
+    "static/css/2.a212dddb.chunk.css",
+    "static/js/2.294b4391.chunk.js",
+    "static/css/main.64c565d3.chunk.css",
+    "static/js/main.06aabee8.chunk.js"
+  ]
+}

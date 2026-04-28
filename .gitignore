@@ -34,3 +34,5 @@ yarn-error.log*
 
 # generated per-entry OG images (built by scripts/build-og.mjs in prebuild)
 public/og/
+
+docs/

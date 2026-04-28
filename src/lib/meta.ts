@@ -60,8 +60,8 @@ export function personSchema() {
     description: SITE.description,
     worksFor: {
       "@type": "Organization",
-      name: "Evolute CX",
-      url: "https://evolute.cx",
+      name: "Evolute GmbH",
+      url: "https://evolute.app",
     },
     sameAs: [SITE.github, SITE.linkedin, SITE.gitlab],
   };

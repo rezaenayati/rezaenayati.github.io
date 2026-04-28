@@ -142,7 +142,7 @@ The landing page is the primary entry. The dedicated index pages exist mainly fo
 - **GitLab:** https://gitlab.com/enayatii.reza
 - **Domain:** rezaenayati.me
 - **Years of experience:** 6+
-- **Current role:** Senior Backend Engineer at Evolute CX GmbH (Germany, Remote), since March 2025
+- **Current role:** Senior Backend Engineer at Evolute GmbH (Germany, Remote), since March 2025
 - **Languages spoken:** Persian (native), English (C1, advanced)
 
 ---
@@ -158,7 +158,7 @@ A single scrollable page with the following sections, in this order. No nav anim
 - Subhead, smaller weight: `Senior Backend Engineer · AI / LLM`
 - One paragraph (verbatim, as starting copy — adjust only if asked):
 
-  > Senior backend engineer with 6+ years of production Node.js / TypeScript experience, currently focused on shipping LLM-powered features end-to-end at [Evolute CX](https://evolute.app). I work across Azure OpenAI integrations, MongoDB performance, and clean-architecture / DI-based services.
+  > Senior backend engineer with 6+ years of production Node.js / TypeScript experience, currently focused on shipping LLM-powered features end-to-end at [Evolute GmbH](https://evolute.app). I work across Azure OpenAI integrations, MongoDB performance, and clean-architecture / DI-based services.
 
 - Two buttons: `Read case studies` (anchors to #case-studies), `Download CV (PDF)` (links to `/cv.pdf`).
 - Inline icon links: GitHub, LinkedIn, Email.
@@ -178,7 +178,7 @@ A single scrollable page with the following sections, in this order. No nav anim
 **Currently (`#currently`)**
 - Section heading: `Currently`.
 - A short bullet list (3–5 items). Starting content (replace anytime):
-  - `Backend lead at Evolute CX, focused on LLM-powered customer-experience features.`
+  - `Backend lead at Evolute GmbH, focused on LLM-powered customer-experience features.`
   - `Open to Senior Backend / Tech Lead / AI Engineer roles, EU remote (CET ±2).`
   - `Reading: [book or paper title], whatever I'm currently into.`
   - `Tinkering: small AI side-tools.`

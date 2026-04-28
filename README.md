@@ -120,8 +120,12 @@ to GitHub Pages via GitHub Actions on every push to `main`.
    git push -u origin main
    ```
 
-3. In the repo, go to **Settings → Pages** and set **Source: GitHub Actions**.
-   (Do not pick "Deploy from branch" — the workflow handles deploys.)
+3. **Critical**: in the repo, go to **Settings → Pages → Build and deployment**
+   and change **Source** from "Deploy from a branch" (the default) to
+   **"GitHub Actions"**. If you skip this, GitHub runs Jekyll on every push and
+   ignores `.github/workflows/deploy.yml` — Jekyll will then choke on Astro's
+   `.astro` frontmatter and fail with `Invalid YAML front matter` errors.
+   (`public/.nojekyll` is also committed as a safety net.)
 4. The first push to `main` triggers `.github/workflows/deploy.yml`. After it
    succeeds, the site is live at <https://rezaenayati.github.io>.
 

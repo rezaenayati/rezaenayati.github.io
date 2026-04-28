@@ -169,7 +169,7 @@ function entrySvg({ eyebrow, title, tags }) {
     }
     <line x1="80" y1="500" x2="1120" y2="500" stroke="#232325" stroke-width="1"/>
     <text x="80" y="540" font-size="22" fill="#b0b0b0">Reza Enayati · Senior Backend Engineer</text>
-    <text x="1120" y="540" font-size="22" fill="#5e5e5e" text-anchor="end">rezaenayati.github.io</text>
+    <text x="1120" y="540" font-size="22" fill="#5e5e5e" text-anchor="end">rezaenayati.me</text>
   </g>
 </svg>`;
 }

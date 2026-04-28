@@ -137,13 +137,16 @@ Linked from:
 ## Deploying
 
 The site is fully static (`output: "static"` is the Astro default). It deploys
-to GitHub Pages via GitHub Actions on every push to `main`.
+to GitHub Pages via GitHub Actions on every push to `main`. Production URL:
+<https://rezaenayati.me>. The `rezaenayati.github.io` URL still resolves and
+GitHub Pages 301-redirects it to the apex.
 
 ### One-time setup (GitHub Pages)
 
-1. Create a repo on GitHub named **exactly** `rezaenayati.github.io` (the repo
-   name is what GitHub uses to route the user site).
-2. Push this project to that repo on the `main` branch:
+1. The repo on GitHub is named **exactly** `rezaenayati.github.io` (the repo
+   name is what GitHub uses to route the "user site"). Even with a custom
+   domain, the repo name stays the same.
+2. Initial push (already done):
 
    ```bash
    git init
@@ -154,45 +157,50 @@ to GitHub Pages via GitHub Actions on every push to `main`.
    git push -u origin main
    ```
 
-3. **Critical**: in the repo, go to **Settings → Pages → Build and deployment**
-   and change **Source** from "Deploy from a branch" (the default) to
-   **"GitHub Actions"**. If you skip this, GitHub runs Jekyll on every push and
-   ignores `.github/workflows/deploy.yml` — Jekyll will then choke on Astro's
-   `.astro` frontmatter and fail with `Invalid YAML front matter` errors.
-   (`public/.nojekyll` is also committed as a safety net.)
-4. The first push to `main` triggers `.github/workflows/deploy.yml`. After it
-   succeeds, the site is live at <https://rezaenayati.github.io>.
+3. **Critical**: in the repo, **Settings → Pages → Build and deployment** must
+   be set to **Source: "GitHub Actions"** (not the default "Deploy from a
+   branch"). Otherwise GitHub runs Jekyll on every push and ignores
+   `.github/workflows/deploy.yml` — Jekyll then chokes on Astro's `.astro`
+   frontmatter with `Invalid YAML front matter` errors. (`public/.nojekyll`
+   is also committed as a safety net.)
+4. Each push to `main` triggers `.github/workflows/deploy.yml` and redeploys.
 
 The workflow uses [`withastro/action@v3`](https://github.com/withastro/action),
 which auto-detects pnpm via the `pnpm-lock.yaml` and runs `pnpm build`.
+
+### Custom domain (`rezaenayati.me`)
+
+The custom domain is wired up via three things working together:
+
+1. **`public/CNAME`** — contains `rezaenayati.me`. Astro copies it from
+   `public/` into `dist/CNAME` on every build, which is what GitHub Pages
+   reads to know the custom domain.
+2. **GitHub Settings → Pages → Custom domain** field — set to `rezaenayati.me`,
+   "Enforce HTTPS" enabled.
+3. **DNS at the registrar** — apex `A` records pointing at GitHub Pages:
+
+   ```
+   A   @   185.199.108.153
+   A   @   185.199.109.153
+   A   @   185.199.110.153
+   A   @   185.199.111.153
+   ```
+
+   Optionally also a `CNAME www → rezaenayati.github.io.` so `www.rezaenayati.me`
+   redirects to the apex.
+
+`site` in `astro.config.mjs` and `SITE.url` in `src/lib/meta.ts` are both set
+to `https://rezaenayati.me`, which is what every canonical URL, OG tag,
+sitemap entry, and JSON-LD `url` is built from. Keep them in sync.
+
+If the custom domain ever needs to be removed (e.g. domain expires), delete
+`public/CNAME` and clear the GitHub Pages Custom domain field. The site will
+fall back to `rezaenayati.github.io` after re-deploy.
 
 ### Continuous deploys
 
 Every subsequent push to `main` rebuilds and redeploys. Manual deploys are
 available under **Actions → Deploy to GitHub Pages → Run workflow**.
-
-### Switching to the custom domain (`rezaenayati.me`)
-
-When you're ready to point the custom domain at the same GitHub Pages site:
-
-1. Add a `public/CNAME` file containing exactly:
-
-   ```
-   rezaenayati.me
-   ```
-
-2. Update `site` in `astro.config.mjs` and `SITE.url` in `src/lib/meta.ts` to
-   `https://rezaenayati.me`. Update the `Sitemap:` line in `public/robots.txt`
-   too.
-3. In your DNS provider, point the apex `rezaenayati.me` at GitHub Pages:
-   - `A` records to `185.199.108.153`, `185.199.109.153`, `185.199.110.153`,
-     `185.199.111.153`
-   - (Optional) `AAAA` records to the IPv6 equivalents listed in the
-     [GitHub Pages docs](https://docs.github.com/pages/configuring-a-custom-domain-for-your-github-pages-site/managing-a-custom-domain-for-your-github-pages-site).
-4. In **Settings → Pages → Custom domain**, enter `rezaenayati.me` and
-   wait for the HTTPS certificate to provision (a few minutes, usually).
-5. Re-run the deploy workflow so the new sitemap and OG meta tags pick up
-   the updated URL.
 
 ### Other static hosts (optional)
 
@@ -223,6 +231,6 @@ See `personal-website-brief.md` §13 for the source of truth. Headline items:
 - [x] All external links open in a new tab with `rel="noopener"`.
 - [x] GitHub Actions workflow for auto-deploy to GitHub Pages.
 - [ ] Replace `public/cv.pdf.placeholder` with the real CV.
-- [ ] Push to `rezaenayati.github.io` repo and enable Pages → GitHub Actions.
-- [ ] (Optional) Attach `rezaenayati.me` custom domain.
+- [x] Push to `rezaenayati.github.io` repo and enable Pages → GitHub Actions.
+- [x] Attach `rezaenayati.me` custom domain.
 - [ ] Run Lighthouse on prod URL; fix anything below 95.

@@ -4,7 +4,7 @@ export const SITE = {
   description:
     "Senior backend engineer with 6+ years of production Node.js / TypeScript experience, focused on shipping LLM-powered features end-to-end.",
   // Canonical URL for SEO / OG tags. Keep this in sync with `site` in astro.config.mjs.
-  url: "https://rezaenayati.github.io",
+  url: "https://rezaenayati.me",
   ogImage: "/og-default.png",
   email: "enayatii.reza@gmail.com",
   github: "https://github.com/rezaenayati",

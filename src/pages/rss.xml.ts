@@ -3,7 +3,7 @@
 // NetNewsWire, Reeder, etc.) plus aggregators like Hacker News' RSS bots.
 import rss from "@astrojs/rss";
 import { getCollection } from "astro:content";
-import { SITE } from "~/lib/meta";
+import { SITE } from "~/lib/meta.ts";
 import type { APIContext } from "astro";
 
 export async function GET(context: APIContext) {

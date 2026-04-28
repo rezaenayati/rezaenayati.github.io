@@ -1,0 +1,100 @@
+---
+title: "Reading explain plans without panicking"
+summary: "MongoDB explain plans look intimidating because the field names sound like ceremonial Latin. They aren't, and they don't have to be. Three numbers and one stage name will tell you 80% of what you need to know about a slow query."
+tags: ["MongoDB", "Performance", "Backend"]
+publishedAt: "2025-10-22"
+updatedAt: "2025-10-22"
+readingTime: "7 min"
+draft: false
+---
+
+## TL;DR
+
+A MongoDB explain plan is a small JSON object that tells you exactly what the database is about to do with your query. People avoid them because they look intimidating and because the field names sound like ceremonial Latin. They aren't, and they don't have to be. Three numbers and one stage name will tell you 80% of what you need to know about a slow query.
+
+## Why people avoid explain plans
+
+Two reasons, mostly:
+
+- The output is large. `db.collection.find(…).explain("executionStats")` returns a JSON tree with dozens of fields, most of which are not useful to a human in a hurry. Reading it for the first time feels like being handed an engine-bay schematic and asked why the car is slow.
+- The vocabulary is unfamiliar. *Winning plan*, *rejected plans*, *FETCH*, *COLLSCAN*, *IXSCAN*, *PROJECTION_DEFAULT*. None of this is hard, but if you don't already know what it means, it sounds like there's a lot to learn.
+
+There isn't. There are roughly five concepts. You can hold them in your head.
+
+## What I look at first
+
+Run the query with `executionStats`:
+
+```js
+db.items.find({ status: "ACTIVE", tenantId: t }).explain("executionStats")
+```
+
+I look at three numbers and one string, in this order:
+
+1. **`executionStats.executionTimeMillis`** — how long the query actually took, server-side. Not the round-trip time. Server time.
+2. **`executionStats.totalDocsExamined`** — how many documents the database looked at to satisfy the query.
+3. **`executionStats.nReturned`** — how many documents the query actually returned.
+4. **`queryPlanner.winningPlan.stage`** — the top-level operation. The two you care about most are `COLLSCAN` and `IXSCAN`.
+
+If you only memorize two things from this article, memorize this:
+
+- A *good* query has `totalDocsExamined` close to `nReturned`. Ideally equal. The database looked at exactly the documents it returned.
+- A *bad* query has `totalDocsExamined` much larger than `nReturned`. The database read a lot of documents to find a few. This is almost always your problem.
+
+The ratio is the diagnostic. The number itself isn't.
+
+## The two stage names you'll see most
+
+There are more stages, but in day-to-day work two cover almost everything:
+
+- **`COLLSCAN`** — collection scan. The database read every document in the collection, then filtered. Almost always means there's no usable index, or the planner didn't pick one. Acceptable on tiny collections; never acceptable on collections you expect to grow.
+- **`IXSCAN`** — index scan. The database used an index to seek directly to qualifying entries. This is what you want for any non-trivial query. Below an `IXSCAN` you'll often see a `FETCH` stage, which means "use the index to find document IDs, then go read those documents from the collection."
+
+If your slow query shows `COLLSCAN` and your `totalDocsExamined` is large, you've found the problem. Stop reading the explain plan. Go add an index.
+
+## When `IXSCAN` is still slow
+
+This is the case people ask me about more than any other: "the query is using an index, but it's still slow."
+
+What's almost always going on: the index is being used, but it's not narrowing the result set enough, so the `FETCH` stage is reading too many documents.
+
+Look at:
+
+- **`executionStats.executionStages.inputStage.keysExamined`** vs. **`docsExamined`**. If `keysExamined` is high, the index range you're scanning is wide. The index is helping in the technical sense (it's an index scan, not a collection scan) but you're scanning a lot of the index.
+- The shape of your filter. A query like `{ status: "ACTIVE", createdAt: { $gt: lastWeek } }` against an index on `(status)` alone will scan every active document, then filter by date in memory. An index on `(status, createdAt)` lets the engine seek to "active documents created after this date" directly.
+
+The fix is usually a compound index, ordered by selectivity (most-selective field first, with care for the equality-vs-range distinction).
+
+## When the planner picks the "wrong" plan
+
+Sometimes the planner picks a plan you didn't expect. This is where `rejectedPlans` comes in.
+
+`queryPlanner.rejectedPlans` is a list of the alternatives the planner considered and didn't choose. If the winning plan looks bad to you, look at the rejected ones. There are usually one of two situations:
+
+- **A more selective index existed but wasn't picked.** This happens when the planner's statistics are stale or it ran a brief test query and the test was misleading. Try a hint: `find(…).hint({ status: 1, tenantId: 1 })`. If the hinted plan is much faster, the planner is making a bad call and you can decide whether to make the hint permanent or fix the underlying issue.
+- **The "right" index doesn't exist.** The planner picked the closest thing it had. The fix is usually a new compound index, not a hint.
+
+I almost always avoid hardcoding hints in production code. They're a workaround, not a fix. For a one-off slow report, they're fine.
+
+## A quick checklist
+
+When a query is slow and I'm looking at the explain plan, my mental checklist:
+
+1. Look at `executionTimeMillis`. Is it actually the slow query, or am I looking at the wrong one?
+2. Compare `totalDocsExamined` and `nReturned`. Is the ratio bad?
+3. Check `winningPlan.stage`. `COLLSCAN`? Add an index.
+4. If `IXSCAN`, look at the index used and whether the filter shape really matches the index ordering.
+5. If still confused, look at `rejectedPlans` to see what the planner considered.
+6. Consider whether the issue is on the read path at all. Sometimes the query is fast but the result set is huge and the slowness is in serialization or the network.
+
+The whole exercise usually takes a minute or two when I'm familiar with a query, ten minutes when I'm meeting it for the first time. It's not a deep skill. It's a short skill that you reach for often.
+
+## What this doesn't cover
+
+A few things deliberately left out, because they're worth their own writeup:
+
+- **Aggregation pipeline explain.** Same idea, more stages, more interesting. The `$match` and `$sort` stages near the front of the pipeline are the ones that usually need an index.
+- **The slow query log and the database profiler.** Useful for catching slow queries you didn't know existed, but a separate tool from explain plans.
+- **Collation and collection-level options** that change which indexes are usable. If you've ever had a query that "should" use an index and doesn't, this is usually why.
+
+But for the moment when a teammate sends you a Slack message that says "this query is slow, can you take a look" — three numbers, one stage name, and a willingness to add a compound index will get you most of the way there.

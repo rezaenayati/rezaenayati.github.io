@@ -30,6 +30,14 @@ const onLanding = pathname === "/" || pathname === "";
         </li>
         <li>
           <a
+            href="/articles/"
+            class="no-underline text-[var(--color-muted)] hover:text-[var(--color-fg)] transition-colors"
+          >
+            Writing
+          </a>
+        </li>
+        <li>
+          <a
             href={onLanding ? "#contact" : "/#contact"}
             class="no-underline text-[var(--color-muted)] hover:text-[var(--color-fg)] transition-colors"
           >

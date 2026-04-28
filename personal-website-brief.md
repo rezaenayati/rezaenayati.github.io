@@ -135,7 +135,7 @@ The landing page is the primary entry. The dedicated index pages exist mainly fo
 
 - **Name:** Reza Enayati
 - **Tagline / role:** Senior Backend Engineer · AI / LLM
-- **Location:** Remote · CET ±2 · based in Iran
+- **Location:** Remote · CET ±2
 - **Email:** enayatii.reza@gmail.com
 - **LinkedIn:** https://www.linkedin.com/in/reza-enayati/
 - **GitHub:** https://github.com/rezaenayati

@@ -2,8 +2,12 @@
 //   - public/og-default.png            (rendered from public/og-default.svg)
 //   - public/og/<collection>/<slug>.png (one per case study / article)
 //
-// Uses `sharp` (transitive Astro dep) and `gray-matter` to parse MDX frontmatter.
-// Wired into `prebuild` so production builds always emit fresh PNGs.
+// Uses `sharp` (explicit dep — pnpm 9+ does not allow importing transitive
+// deps) and `gray-matter` to parse MDX frontmatter.
+//
+// Run as part of `pnpm build` (chained before `astro build`). The previous
+// `prebuild` lifecycle hook does NOT work under pnpm 9+, which disables
+// pre/post lifecycle scripts by default.
 //
 // Per-entry images are written under `public/og/`, which is gitignored: they
 // regenerate on every CI build, so the repo stays binary-blob-free.

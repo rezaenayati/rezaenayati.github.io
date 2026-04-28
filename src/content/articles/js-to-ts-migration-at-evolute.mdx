@@ -1,0 +1,104 @@
+---
+title: "The JS → TS migration at Evolute, 2 years in"
+summary: "Notes on a JavaScript-to-TypeScript migration the team has been on for two years. The early gains are easy and large, the middle gains are gradual and large, and the long tail is small and never quite ends. That isn't failure — that's the shape."
+tags: ["TypeScript", "Migration", "Backend", "Tooling"]
+publishedAt: "2025-04-15"
+updatedAt: "2025-04-15"
+readingTime: "8 min"
+draft: false
+---
+
+## TL;DR
+
+The migration didn't finish in six months, didn't finish in a year, and might still be going for another year. That's not a failure. The structure of an incremental TS migration is that the early gains are easy and large, the middle gains are gradual and large, and the long tail is small and never quite ends. Two years in, the codebase is "TypeScript with some `any`s and some `.js` holdouts," and that's a much better place to be than "JavaScript with comments."
+
+## Why the team did it
+
+By the time I joined, the migration was already well underway. The team had grown faster than the type system could be added by retrofit. The pain wasn't theoretical:
+
+- Refactors of shared utilities broke 2–3 callers in production that nobody had thought of.
+- New backend hires spent their first month learning what fields were on objects whose shape was, essentially, "whatever the producer happened to put there."
+- A particular class of bug — a missing field on a payload causing a silent NaN downstream — accounted for an embarrassing fraction of reported issues.
+
+The team did not adopt TypeScript because it was fashionable. They adopted it because the code had outgrown the language.
+
+## What we ruled out
+
+The temptation, when a JavaScript codebase becomes painful, is to rewrite. The team didn't seriously entertain it. Three reasons:
+
+- The product was alive and shipping.
+- Most of the value in the code was not in the algorithms; it was in the accumulated business logic, the corner cases handled, the integrations that just happened to work. Rewriting would re-litigate every one of those.
+- There was nowhere to deploy a rewrite that wasn't, eventually, the same place.
+
+The chosen approach was incremental migration with `allowJs: true`, `checkJs: false`, and `noEmit: false` — just enough TS to start adding `.ts` files alongside `.js`, and zero pressure to convert the rest yet.
+
+## The plan, such as it was
+
+Three rules, written on a page, and we still haven't broken any of them:
+
+1. Any new file is `.ts`. No exceptions.
+2. Any file you touch substantially gets converted while you're in there.
+3. Leaf modules first; cross-cutting infrastructure last.
+
+That's it. There's no deadline. There's no percentage target. There's no "TypeScript team." It would have failed if there were.
+
+The reason it would have failed: a deadline gives you cheap conversions. People rename `.js` to `.ts`, sprinkle `as any` to make the compiler quiet, and call it done. The codebase is technically TypeScript and substantially still JavaScript. Don't reward the rename.
+
+## The first six months
+
+Most of the early conversions were leaf modules: pure helpers, utility libraries, formatting code, shared validators. These were easy. The types were obvious because the inputs and outputs were small. Progress without architectural decisions.
+
+A useful side effect: the act of adding types surfaced bugs nobody had logged. Functions that "worked" because no one had ever called them with the wrong shape. Optional fields that callers were accessing without `?`. None of these were dramatic. All of them were the kind of thing that wakes you up at 3 a.m. once a quarter.
+
+The single most valuable change in those six months wasn't an annotation. It was a lint rule: any new file must be `.ts`, blocked at PR time. That one rule did more for the migration than any specific type ever did.
+
+## The middle
+
+After six months, the easy conversions were done. What remained was the load-bearing stuff: route handlers, the data layer, the dependency-injection wiring, the modules with side effects and complex generic shapes. This is the part where being honest about cost mattered.
+
+A few patterns the team leaned on:
+
+- **Adapter types at module boundaries.** Where a TS module had to call into a JS module, we wrote a thin `.d.ts` describing what we believed it returned, marked the function as accepting our types, and dealt with the fact that the JS side could lie. The lie was at the boundary, not throughout the calling code. When the JS side eventually got converted, the `.d.ts` was already there and either matched or was wrong in a useful, visible way.
+- **`unknown` instead of `any`** in handler input positions. Forces a Zod parse or equivalent before use. Caught a real number of bugs this way; the `any` would have just propagated the wrong shape.
+- **No `as` outside narrow utility functions.** A code-review heuristic: a `as` in a feature module is a smell; a `as` in a parser or adapter is fine.
+
+## The boring tooling
+
+Most of the actual *time* in the migration went to tooling, not types. Some of what ate hours:
+
+- TS-aware test runner configuration that didn't slow CI by 2x.
+- ESM/CJS interop, which I will not dignify with detail.
+- Deciding which `tsconfig` settings to enforce repo-wide vs. per-package.
+- Build pipelines that emitted both `.d.ts` files and the runtime bundle, in the right order, for the right consumers.
+- Editor experience: making sure TypeScript was fast enough in the IDE that nobody felt the migration was slowing them down.
+
+None of this is interesting to talk about. All of it has to be done. Anyone who's been through one of these will recognize the shape immediately.
+
+## What two years bought
+
+Concrete things:
+
+- **Refactor confidence.** Renaming a field on a domain object now produces a list of every call site, in seconds. We do this often.
+- **Onboarding speed.** New backend hires get useful within a week or two, not a month. The IDE tells them what the data looks like; they don't have to ask.
+- **A specific class of bug, almost gone.** The "missing field, silent NaN downstream" family. Not zero, but a different order of magnitude.
+- **Reviewability.** PRs are smaller, because the author had to think about types up front instead of leaving the question for review.
+
+Things that did *not* change as much as people sometimes promise:
+
+- Code is not magically easier to write. Adding types adds friction, especially for fast iteration. We accept the trade.
+- Bugs do not vanish. They migrate. We now have a class of bug that's about types being wrong in confident ways. That's progress, not perfection.
+- Build performance is permanently worse. Caching helps. It doesn't undo it.
+
+## What I'd do differently
+
+Two things, looking back at the parts I was around for and the parts I've heard from teammates who were around earlier.
+
+**Pick your `tsconfig` strictness early and don't relax it.** Some flags were left off in the early conversions because turning them on was painful. Every flag that was left off, the team eventually had to turn on, and turning it on later was always more expensive than turning it on early would have been. Eat the cost up front.
+
+**Convert the dependency-injection wiring earlier.** It's load-bearing. It's the place where types pay off the most. It's also the part that feels intimidating, so it tends to slip to the end. If the DI / composition root is typed early, every new module benefits from it; if it's left for last, every conversion until then is fighting an untyped backbone.
+
+## Where we are now
+
+Roughly 85% TypeScript by file count, closer to 95% by code touched in the last 90 days. The remaining `.js` files are mostly old scripts, some integration glue, and a handful of modules where the cost of conversion exceeds the value (long-lived stable code that nobody reads). We will probably never finish. That's fine.
+
+If I had to compress the lesson into one sentence: **the migration is not a project you complete; it's a discipline you adopt.** The day you stop adding new `.js` files is the day you've actually started winning. Everything after that is just compounding.

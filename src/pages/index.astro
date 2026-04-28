@@ -5,7 +5,7 @@ import Hero from "~/components/Hero.astro";
 import Currently from "~/components/Currently.astro";
 import CaseStudyCard from "~/components/CaseStudyCard.astro";
 import ArticleCard from "~/components/ArticleCard.astro";
-import { SITE } from "~/lib/meta.ts";
+import { SITE, personSchema, websiteSchema } from "~/lib/meta.ts";
 
 const isProd = import.meta.env.PROD;
 
@@ -39,7 +39,7 @@ const currentlyItems = [
 const currentlyUpdated = "April 2026";
 ---
 
-<BaseLayout>
+<BaseLayout jsonLd={[personSchema(), websiteSchema()]}>
   <Hero />
 
   <Currently items={currentlyItems} updated={currentlyUpdated} index="01" />

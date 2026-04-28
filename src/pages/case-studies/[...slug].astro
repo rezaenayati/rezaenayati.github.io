@@ -2,6 +2,7 @@
 import { getCollection, type CollectionEntry } from "astro:content";
 import BaseLayout from "~/layouts/BaseLayout.astro";
 import Prose from "~/components/Prose.astro";
+import { SITE, articleSchema } from "~/lib/meta.ts";
 
 export async function getStaticPaths() {
   const isProd = import.meta.env.PROD;
@@ -24,12 +25,27 @@ const updatedLabel = new Date(updatedDate).toLocaleDateString("en-US", {
   year: "numeric",
   month: "long",
 });
+
+const ogImage = `/og/case-studies/${entry.slug}.png`;
+const canonical = new URL(Astro.url.pathname, SITE.url).toString();
+
+const jsonLd = articleSchema({
+  title: entry.data.title,
+  description: entry.data.summary,
+  url: canonical,
+  publishedAt: entry.data.publishedAt,
+  updatedAt: entry.data.updatedAt,
+  image: new URL(ogImage, SITE.url).toString(),
+  articleType: "TechArticle",
+});
 ---
 
 <BaseLayout
   title={entry.data.title}
   description={entry.data.summary}
   type="article"
+  ogImage={ogImage}
+  jsonLd={jsonLd}
 >
   <article class="pt-10 pb-6">
     <p class="text-sm">

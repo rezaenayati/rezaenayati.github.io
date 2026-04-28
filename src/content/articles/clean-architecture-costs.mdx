@@ -1,0 +1,93 @@
+---
+title: "What 'clean architecture' actually costs you"
+summary: "Clean architecture is a real win in some codebases and a real cost in others. The costs are not theoretical and they're not optional. If you can name the specific thing the architecture is buying you, it's probably worth the price. If you can't, it isn't."
+tags: ["Architecture", "Backend", "Opinion"]
+publishedAt: "2025-07-15"
+updatedAt: "2025-07-15"
+readingTime: "8 min"
+draft: false
+---
+
+## TL;DR
+
+Clean architecture (or hexagonal, or ports-and-adapters, or whatever your team calls it) is a real win in some codebases and a real cost in others. The costs are not theoretical and they're not optional. If you can name the specific thing the architecture is buying you, it's probably worth the price. If you can't, it isn't.
+
+## What we're talking about
+
+For the purposes of this article: a backend codebase organized around explicit boundaries between domain logic, application services, and infrastructure adapters, usually wired together with dependency injection. The domain layer doesn't import the database. The application services don't know what HTTP framework you use. The infrastructure adapters implement interfaces defined inside.
+
+That's the shape. Whether you call it clean architecture, hexagonal, onion, or just "DI-based" doesn't matter for what follows.
+
+## The pitch
+
+The pitch is real, and I'm not here to argue against it:
+
+- You can swap the database without rewriting the business logic. (You almost never do, but you can.)
+- You can test the business logic without spinning up real infrastructure.
+- The domain rules live in one place, in their own vocabulary, not scattered across HTTP handlers.
+- New developers can read the domain layer and understand what the system does, without first learning your specific persistence layer.
+
+These are real benefits. I work in a codebase shaped this way. I would not voluntarily go back to a flat-handler architecture for any team larger than three.
+
+## What it actually costs
+
+The costs are paid every day, not in dramatic moments. They are:
+
+**More files per feature.** A trivial CRUD feature, in a clean-architecture codebase, can easily be: a domain entity, a repository interface, a repository implementation, an application service, an application service interface, a DTO, a request validator, a response mapper, a route handler. Nine files for what was a 30-line Express route in a different lifetime. The 30-line version is worse in many ways. It is also, undeniably, faster to write.
+
+**Indirection that makes navigation slower.** When I'm investigating a bug, I follow the call graph. In a clean-architecture codebase, the call graph passes through interfaces. "Go to definition" lands on the interface, not the implementation. I then have to find the implementation by name. In a small codebase this is a 5-second cost. In a large codebase with multiple implementations of the same interface, it adds up.
+
+**Onboarding cost.** A new developer in a clean-architecture codebase has to learn the architecture before they can ship. There's a layered mental model they need to internalize: where this kind of code lives, where that kind does, why this isn't allowed to import that. The good ones figure it out in a week. The less-experienced ones never quite do, and they end up writing code that's structurally clean architecture and semantically a mess (business logic in adapters, infrastructure concerns leaking into the domain).
+
+**Easy to over-abstract early.** The most common sin I see — including in my own code, looking back — is creating an interface for something that has exactly one implementation and will plausibly never have a second. The interface buys you nothing. It costs you a file and a layer of indirection, and it tells future readers a lie about the system's flexibility.
+
+**Testing benefits are sometimes oversold.** Yes, you can test the domain layer without a database. You can also write integration tests against a real database that catch a different and arguably more important class of bugs. The clean-architecture codebases I've worked in tend to have *more* unit tests and *fewer* integration tests than I'd ideally like. The architecture makes the unit tests easy, so people write them. The integration tests are still hard, so people skip them. The bugs that escape to production are the bugs the integration tests would have caught.
+
+**A specific TypeScript / Node.js cost.** The DI containers I've used in TS are rarely as ergonomic as the ones in Java or C#. There's friction at the wiring layer that more mature ecosystems have engineered out. It's a small cost per instance. It adds up.
+
+## When it pays off
+
+The architecture pays for itself when:
+
+- The codebase is going to live for more than two years.
+- More than three or four developers will work in it concurrently.
+- The domain has clear bounded contexts with non-trivial logic. (Pure CRUD does not benefit much.)
+- You expect to swap *some* infrastructure decisions during the codebase's lifetime, even just one (e.g., monolith to a few services, or one queue technology to another). Not all the swaps the architecture theoretically enables. Just some.
+- You care about long-term maintainability more than short-term velocity. You should usually care about both, but if you have to weight them, the architecture rewards the long-term focus.
+
+In my current codebase, all of these are true. The architecture pays for itself.
+
+## When it doesn't pay off
+
+The architecture is a net cost when:
+
+- You're a team of one or two, building a v1 you might throw away.
+- The product is a thin layer over a database; the domain is essentially "expose these tables as an API."
+- The team rotates faster than the architecture can be onboarded.
+- Speed of experimentation matters more than long-term structure.
+- Nobody on the team has worked in a clean-architecture codebase before. (You will get the costs and not the benefits.)
+
+In all of these, a flat structure with handlers calling functions calling the database is *better*. Less code to write. Less code to read. Fewer concepts to teach. The simplicity is the feature.
+
+## The trap of "we'll add the architecture later"
+
+A common compromise — and one I've heard pitched by smart engineers — is to start flat and "extract the domain layer when we feel the need."
+
+I have never seen this work cleanly. By the time you "feel the need," the domain logic is so entangled with the HTTP handlers and the persistence calls that extracting it is a project, not an afternoon. The team is also under pressure to ship features, so the extraction project never gets prioritized. The codebase is permanently "we'll get to it."
+
+The honest answer is to pick the right shape on day one. If you're confident you're building a long-lived multi-developer codebase, do clean architecture from the start, even when it feels like overkill for the first three features. If you're not, don't, and accept that you'll rewrite if the project survives long enough to need it.
+
+## What I do day-to-day
+
+Some specific habits I've landed on, working in a clean-architecture TypeScript codebase:
+
+- I do not introduce an interface until there's a second implementation in sight. "It might exist someday" is not enough.
+- I keep the application services thin. They orchestrate; they do not contain logic. If a service method is more than ~20 lines, the logic belongs in the domain.
+- I tolerate a small amount of cross-layer leakage where it dramatically improves clarity. A repository method named after a domain concept (e.g., `findActiveTicketsForTenant`) is fine; it's not pure persistence, but it reads better at the call site than a generic `find` with a complex query object.
+- I write integration tests for the load-bearing paths. Unit tests for the domain are nice. Integration tests for "this whole feature actually works against a real database" are non-negotiable.
+
+## The honest summary
+
+Clean architecture is a tool. It has a real price tag. Pay the price when the system you're building will recoup it. Don't pay it when it won't. The mistake is not picking the wrong style; the mistake is picking either style without naming what you're getting in exchange.
+
+If you can describe, in two sentences, the specific thing your architecture is buying you next month, you are doing it right. If you can't, the architecture is decoration, and decoration costs more than people admit.

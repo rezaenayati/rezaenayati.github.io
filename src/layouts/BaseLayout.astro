@@ -7,14 +7,22 @@ import { buildMeta, SITE, type MetaInput } from "~/lib/meta.ts";
 
 type Props = Omit<MetaInput, "pathname"> & {
   showHeader?: boolean;
+  /** One or more schema.org JSON-LD objects to embed in <head>. */
+  jsonLd?: Record<string, unknown> | Record<string, unknown>[];
 };
 
-const { showHeader = true, ...metaProps } = Astro.props;
+const { showHeader = true, jsonLd, ...metaProps } = Astro.props;
 
 const meta = buildMeta({
   ...metaProps,
   pathname: Astro.url.pathname,
 });
+
+const jsonLdNodes = jsonLd
+  ? Array.isArray(jsonLd)
+    ? jsonLd
+    : [jsonLd]
+  : [];
 ---
 
 <!doctype html>
@@ -46,6 +54,12 @@ const meta = buildMeta({
 
     <meta name="theme-color" content="#fbfbf9" media="(prefers-color-scheme: light)" />
     <meta name="theme-color" content="#0c0c0d" media="(prefers-color-scheme: dark)" />
+
+    <link rel="alternate" type="application/rss+xml" title={`${SITE.name} — Writing`} href="/rss.xml" />
+
+    {jsonLdNodes.map((node) => (
+      <script type="application/ld+json" set:html={JSON.stringify(node)} />
+    ))}
   </head>
   <body class="min-h-screen flex flex-col">
     <a href="#main" class="skip-link">Skip to content</a>

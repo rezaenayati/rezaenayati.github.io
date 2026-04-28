@@ -43,3 +43,76 @@ export function buildMeta(input: MetaInput): MetaOutput {
     ogType: input.type ?? "website",
   };
 }
+
+// ---------- JSON-LD helpers ----------
+// Output is plain objects; BaseLayout serializes them into a single
+// <script type="application/ld+json"> block. Schema.org validators expect
+// well-formed JSON, so do not include functions / undefined values.
+
+export function personSchema() {
+  return {
+    "@context": "https://schema.org",
+    "@type": "Person",
+    name: SITE.name,
+    url: SITE.url,
+    email: `mailto:${SITE.email}`,
+    jobTitle: "Senior Backend Engineer",
+    description: SITE.description,
+    worksFor: {
+      "@type": "Organization",
+      name: "Evolute CX",
+      url: "https://evolute.cx",
+    },
+    sameAs: [SITE.github, SITE.linkedin, SITE.gitlab],
+  };
+}
+
+export function websiteSchema() {
+  return {
+    "@context": "https://schema.org",
+    "@type": "WebSite",
+    name: SITE.name,
+    url: SITE.url,
+    description: SITE.description,
+    inLanguage: "en",
+  };
+}
+
+export type ArticleSchemaInput = {
+  title: string;
+  description: string;
+  url: string;
+  publishedAt: string;
+  updatedAt?: string;
+  image?: string;
+  /** Article (default) or TechArticle, BlogPosting, etc. */
+  articleType?: "Article" | "TechArticle" | "BlogPosting";
+};
+
+export function articleSchema(input: ArticleSchemaInput) {
+  const dateModified = input.updatedAt ?? input.publishedAt;
+  const out: Record<string, unknown> = {
+    "@context": "https://schema.org",
+    "@type": input.articleType ?? "Article",
+    headline: input.title,
+    description: input.description,
+    url: input.url,
+    datePublished: input.publishedAt,
+    dateModified,
+    inLanguage: "en",
+    author: {
+      "@type": "Person",
+      name: SITE.name,
+      url: SITE.url,
+    },
+    publisher: {
+      "@type": "Person",
+      name: SITE.name,
+      url: SITE.url,
+    },
+  };
+  if (input.image) {
+    out.image = input.image;
+  }
+  return out;
+}

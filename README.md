@@ -102,20 +102,65 @@ pnpm build:og
 
 ## Deploying
 
-The site is fully static (`output: "static"` is the Astro default).
+The site is fully static (`output: "static"` is the Astro default). It deploys
+to GitHub Pages via GitHub Actions on every push to `main`.
 
-### Cloudflare Pages
+### One-time setup (GitHub Pages)
 
-1. Connect the repo in the Cloudflare Pages dashboard.
-2. Build command: `pnpm build`
-3. Build output directory: `dist`
-4. Environment variable: `NODE_VERSION=20` (or 22).
-5. Add the custom domain `rezaenayati.me` in the Pages → Custom domains tab.
+1. Create a repo on GitHub named **exactly** `rezaenayati.github.io` (the repo
+   name is what GitHub uses to route the user site).
+2. Push this project to that repo on the `main` branch:
 
-### Vercel
+   ```bash
+   git init
+   git remote add origin git@github.com:rezaenayati/rezaenayati.github.io.git
+   git add .
+   git commit -m "Initial commit"
+   git branch -M main
+   git push -u origin main
+   ```
 
-Auto-detected. Default Astro settings work. Add the custom domain in the
-Domains tab.
+3. In the repo, go to **Settings → Pages** and set **Source: GitHub Actions**.
+   (Do not pick "Deploy from branch" — the workflow handles deploys.)
+4. The first push to `main` triggers `.github/workflows/deploy.yml`. After it
+   succeeds, the site is live at <https://rezaenayati.github.io>.
+
+The workflow uses [`withastro/action@v3`](https://github.com/withastro/action),
+which auto-detects pnpm via the `pnpm-lock.yaml` and runs `pnpm build`.
+
+### Continuous deploys
+
+Every subsequent push to `main` rebuilds and redeploys. Manual deploys are
+available under **Actions → Deploy to GitHub Pages → Run workflow**.
+
+### Switching to the custom domain (`rezaenayati.me`)
+
+When you're ready to point the custom domain at the same GitHub Pages site:
+
+1. Add a `public/CNAME` file containing exactly:
+
+   ```
+   rezaenayati.me
+   ```
+
+2. Update `site` in `astro.config.mjs` and `SITE.url` in `src/lib/meta.ts` to
+   `https://rezaenayati.me`. Update the `Sitemap:` line in `public/robots.txt`
+   too.
+3. In your DNS provider, point the apex `rezaenayati.me` at GitHub Pages:
+   - `A` records to `185.199.108.153`, `185.199.109.153`, `185.199.110.153`,
+     `185.199.111.153`
+   - (Optional) `AAAA` records to the IPv6 equivalents listed in the
+     [GitHub Pages docs](https://docs.github.com/pages/configuring-a-custom-domain-for-your-github-pages-site/managing-a-custom-domain-for-your-github-pages-site).
+4. In **Settings → Pages → Custom domain**, enter `rezaenayati.me` and
+   wait for the HTTPS certificate to provision (a few minutes, usually).
+5. Re-run the deploy workflow so the new sitemap and OG meta tags pick up
+   the updated URL.
+
+### Other static hosts (optional)
+
+The build output in `dist/` is plain static HTML/CSS/JS. It also deploys
+cleanly to Cloudflare Pages or Vercel without changes — pick `pnpm build`
+as the build command and `dist` as the output directory.
 
 ## Conventions
 
@@ -138,6 +183,8 @@ See `personal-website-brief.md` §13 for the source of truth. Headline items:
 - [x] Print stylesheet (clean monochrome).
 - [x] OG image, canonical URL, sitemap.
 - [x] All external links open in a new tab with `rel="noopener"`.
+- [x] GitHub Actions workflow for auto-deploy to GitHub Pages.
 - [ ] Replace `public/cv.pdf.placeholder` with the real CV.
-- [ ] Deploy to Cloudflare Pages, attach `rezaenayati.me`.
+- [ ] Push to `rezaenayati.github.io` repo and enable Pages → GitHub Actions.
+- [ ] (Optional) Attach `rezaenayati.me` custom domain.
 - [ ] Run Lighthouse on prod URL; fix anything below 95.

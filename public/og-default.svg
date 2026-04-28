@@ -5,7 +5,7 @@
     <!-- Eyebrow -->
     <g transform="translate(80, 110)">
       <rect x="0" y="14" width="40" height="2" fill="#36363a"/>
-      <text x="56" y="22" font-size="20" font-weight="500" letter-spacing="3" fill="#5e5e5e">REZAENAYATI.ME</text>
+      <text x="56" y="22" font-size="20" font-weight="500" letter-spacing="3" fill="#5e5e5e">REZAENAYATI.GITHUB.IO</text>
     </g>
     <!-- Name -->
     <text x="80" y="260" font-size="104" font-weight="600" letter-spacing="-3" fill="#ededed">Reza Enayati</text>

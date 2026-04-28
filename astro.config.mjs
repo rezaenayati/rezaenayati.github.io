@@ -6,7 +6,10 @@ import tailwindcss from "@tailwindcss/vite";
 
 // https://astro.build/config
 export default defineConfig({
-  site: "https://rezaenayati.me",
+  // Deployed to GitHub Pages (user site) at https://rezaenayati.github.io.
+  // For a user site (`<username>.github.io`), the path is `/`, so no `base` setting needed.
+  // To swap to a custom domain later: change `site` and add `public/CNAME` containing the domain.
+  site: "https://rezaenayati.github.io",
   trailingSlash: "ignore",
   redirects: {
     "/cv": "/cv.pdf",

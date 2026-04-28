@@ -1,0 +1,42 @@
+---
+const { pathname } = Astro.url;
+const onLanding = pathname === "/" || pathname === "";
+---
+
+<header
+  data-site-header
+  class="w-full border-b border-[var(--color-rule)]"
+>
+  <div class="mx-auto max-w-3xl px-5 sm:px-6 lg:px-8 py-4 flex items-center justify-between gap-6">
+    <a
+      href="/"
+      class="group inline-flex items-baseline gap-2 no-underline text-[var(--color-fg)]"
+    >
+      <span class="font-semibold tracking-tight">Reza Enayati</span>
+      <span class="hidden sm:inline text-xs text-[var(--color-faint)] group-hover:text-[var(--color-muted)] transition-colors">
+        / backend · AI
+      </span>
+    </a>
+
+    <nav aria-label="Primary" class="text-sm">
+      <ul class="flex items-center gap-5">
+        <li>
+          <a
+            href={onLanding ? "#case-studies" : "/#case-studies"}
+            class="no-underline text-[var(--color-muted)] hover:text-[var(--color-fg)] transition-colors"
+          >
+            Work
+          </a>
+        </li>
+        <li>
+          <a
+            href={onLanding ? "#contact" : "/#contact"}
+            class="no-underline text-[var(--color-muted)] hover:text-[var(--color-fg)] transition-colors"
+          >
+            Contact
+          </a>
+        </li>
+      </ul>
+    </nav>
+  </div>
+</header>

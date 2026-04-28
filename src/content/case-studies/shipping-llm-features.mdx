@@ -1,0 +1,101 @@
+---
+title: "Shipping LLM features end-to-end on Azure OpenAI"
+summary: "Notes from building a multi-language summarization pipeline on Azure OpenAI: provider abstraction, multi-region failover, structured outputs, function calling, and the cost telemetry that kept us honest."
+tags: ["AI", "LLM", "Azure OpenAI", "Backend"]
+publishedAt: "2026-04-25"
+updatedAt: "2026-04-25"
+readingTime: "9 min"
+draft: false
+---
+
+## TL;DR
+
+I led the design and rollout of an LLM summarization pipeline on Azure OpenAI for a B2B SaaS I work on. The pipeline takes a stream of work items per tenant, produces a structured executive summary in the tenant's preferred language, and stores the result alongside per-call cost telemetry. The hard parts were not the prompts. They were the boring parts: an honest provider abstraction, deterministic multi-language handling, real cost accounting, and graceful behavior when a region wobbled.
+
+## Why we built it
+
+Tenants on the platform were producing more operational data per day than any one human could read. The product manager owning that surface had a clear ask: turn this stream into something a tenant lead can read in under a minute, in their own language, without having to click through dashboards. The previous workflow was a per-tenant analyst writing a daily summary by hand — slow, expensive, and not always sent.
+
+We were not trying to replace analysis. We were trying to replace the *transcription* part of analysis: "here is what happened, in plain prose, with the right things highlighted." That framing turned out to matter, because it kept us honest about scope. We were not building a chatbot. We were not building a copilot. We were building a scheduled, deterministic, structured-output pipeline that happened to use an LLM as one of its stages.
+
+Once we held that line, most of the design fell out naturally.
+
+## The shape of the system
+
+The pipeline runs as a worker. A scheduler enqueues a job per tenant per cycle. The worker pulls the relevant data, builds a prompt, calls the model, validates the structured response, runs translation if needed, persists the result, and emits cost telemetry.
+
+A few pieces of that pipeline deserve their own paragraphs.
+
+### Provider abstraction
+
+The application doesn't talk to Azure OpenAI directly. It talks to a small `LlmClient` interface with two methods I actually use: a `complete()` for unstructured generation and a `completeStructured<T>()` for schema-validated generation. The Azure OpenAI implementation lives behind that interface. Everything above it — prompts, business logic, validation — is provider-agnostic.
+
+This is not abstraction for its own sake. It exists because Azure OpenAI's request/response shape is not stable enough to spread through the codebase. Quota errors, content-filter codes, deployment naming, region routing — all of that lives in one file. If we needed to swap to a non-Azure provider tomorrow, the blast radius is one module, not the whole worker tree.
+
+### Deployment registry
+
+Azure OpenAI exposes models via *deployments* per region. A deployment is a (model, region, quota) triple, and the same logical model — say, the most capable available text model — can have different deployment names in different regions. Hardcoding deployment names anywhere outside one config file is a slow-moving disaster.
+
+So I built a tiny deployment registry: a typed map from a logical role (`primarySummarizer`, `translator`, etc.) to a list of concrete deployments, ordered by preference, each with a region tag, a context-window hint, and a per-region rate-limit ceiling. The `LlmClient` consults the registry. Callers ask for a *role*, never a deployment name.
+
+This sounds like overhead until the first time you have to add a new region or rotate a deployment. Then it pays for itself in one PR.
+
+### Multi-region failover
+
+Azure OpenAI regions have bad days. Sometimes a region is healthy but the specific deployment you want is at quota. Sometimes the region itself is degraded and every call returns a 5xx after a 30-second wait. The pipeline has to be honest about both.
+
+The client tries deployments in registry order with a small budget per attempt: tight per-call timeout, no retries on the same deployment for 5xx, fast hop to the next deployment in the registry. Within a deployment, only retry on the codes that genuinely indicate transient quota pressure (and even then, with backoff and a hard cap on attempts).
+
+The behavior we *don't* want, and explicitly designed against: long total wall-clock times because the client retried a degraded primary five times before considering a healthy secondary. A good failover policy is one that hops fast, not one that retries patiently.
+
+### Structured outputs and function calling
+
+The summary the worker emits has a fixed shape: a small JSON object with a headline, three to five highlights, an explicit list of "things that need a human to look at," and a metadata block. We use structured-output / function-calling so the model returns JSON that we can validate against a Zod schema before persisting.
+
+Two things made this practical:
+
+- **Validate aggressively, fail loudly.** If the model returns JSON that doesn't conform to the schema, the worker logs the violation, drops the result, and surfaces a metric. We do not "try to parse around it." We do not silently coerce. A schema violation is a bug we want to see.
+- **Keep the schema small.** Every additional field is one more thing the model can get wrong, and one more thing reviewers have to look at. The schema is intentionally narrow. We add fields when the product genuinely needs them, not when they'd be "nice to have."
+
+## Translation as a separate concern
+
+The biggest temptation, early on, was to ask the summarizer to produce all needed languages in one call. We tried it. It works, sort of. It is also the wrong design.
+
+Failure modes when summarization and translation share a call:
+
+- **Quality is worse for the non-primary language.** The model gives noticeably more polished prose in whichever language it's "thinking in," which is essentially the prompt language.
+- **Cost is opaque.** You don't know how much of your token bill is the summarization itself versus the translation.
+- **Caching is impossible.** Two tenants who'd produce identical English summaries but want different languages can't share work.
+
+So we separated the stages. Summarization runs once, in a canonical language, and produces the structured output. Translation is a second, smaller call per target language, against the structured fields, with a stricter prompt. The translator stage is allowed to be a different (smaller, cheaper) model than the summarizer, and frequently is.
+
+This also makes the per-language cost legible, which matters more than I expected.
+
+## Cost and telemetry
+
+Every LLM call writes a structured telemetry record: which deployment served it, the role it was called for, prompt and completion token counts, the converted dollar cost (using the per-deployment rate from the registry), and the tenant the call was for. The records land in a normal time-series table.
+
+What we use this for, in order of how much we look at it:
+
+1. **Per-tenant cost-to-serve.** The single most useful number. It tells the business whether the feature is profitable per tenant, and surfaces the few tenants whose data shape is unusually expensive to summarize.
+2. **Per-language cost split.** Translation cost as a fraction of total cost, per language. If translation creeps above the summarization cost for a language, that's a signal we should reconsider the model used for that translation.
+3. **Per-deployment latency and error rates.** Used to tune the registry order. A deployment that's been flaky for a week gets demoted. We don't tune this in real time; we tune it when humans look at the dashboard.
+4. **Anomalies.** A tenant whose token usage doubles overnight is almost always a tenant whose data shape changed. Worth a look, but rarely worth paging on.
+
+The telemetry was retrofitted. It would have been cheaper to add it on day one. I'd build it in from the start next time.
+
+## Lessons
+
+A few things that would shape the next pipeline I build:
+
+- **Treat the LLM as a stage, not the system.** The prompt is the smallest part of what makes this pipeline reliable. The boring infrastructure around the prompt — registry, failover, validation, telemetry — is what makes it shippable.
+- **Don't pretend you can dodge structured outputs.** Free-text completions feel cheaper until you try to validate them. Schema-enforced outputs are cheaper everywhere else: testing, observability, the downstream consumer's mental model.
+- **Separate concerns in the call graph, not just in the code.** Summarization and translation are two different problems with two different cost profiles. They should be two different calls, even if the wrapper around them is one function.
+- **Per-tenant cost is the metric that survives leadership rotation.** If you only build one dashboard, build that one. Latency dashboards get glanced at; a "what does this cost per customer" dashboard gets looked at by everybody, eventually.
+
+A couple of things I haven't done that I'd flag honestly:
+
+- **Streaming.** This pipeline is batch by design — the consumer is reading a stored summary, not watching tokens land. I have not built a streaming path in production, though the abstraction is shaped to support one.
+- **Fine-tuning and evals.** No fine-tuning. No formal eval harness yet — quality regressions are caught by humans reading samples, not by an automated suite. Both are next on the list. I wouldn't claim to have done them.
+
+The pipeline has been quiet in production, which is the highest praise an LLM feature can earn. The work that made it quiet was almost all on the engineering side of the line, not the prompting side. That's the lesson I keep coming back to.

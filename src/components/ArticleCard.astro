@@ -1,0 +1,28 @@
+---
+type Props = {
+  href: string;
+  title: string;
+  summary: string;
+  readingTime: string;
+};
+
+const { href, title, summary, readingTime } = Astro.props;
+---
+
+<a
+  href={href}
+  class="group block p-5 rounded-md border border-[var(--color-rule)] no-underline hover:border-[var(--color-fg)] hover:bg-[var(--color-bg-soft)] transition-colors"
+>
+  <h3 class="text-base font-semibold leading-snug text-[var(--color-fg)] group-hover:text-[var(--color-accent)] transition-colors">
+    {title}
+  </h3>
+  <p class="mt-1.5 text-[var(--color-muted)] text-sm leading-relaxed line-clamp-2">
+    {summary}
+  </p>
+  <p class="mt-4 flex items-center text-xs text-[var(--color-subtle)]">
+    <span>{readingTime} read</span>
+    <span aria-hidden="true" class="ml-auto text-[var(--color-faint)] group-hover:text-[var(--color-fg)] transition-colors">
+      →
+    </span>
+  </p>
+</a>

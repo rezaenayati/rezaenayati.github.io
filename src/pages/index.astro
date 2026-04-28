@@ -1,0 +1,158 @@
+---
+import { getCollection } from "astro:content";
+import BaseLayout from "~/layouts/BaseLayout.astro";
+import Hero from "~/components/Hero.astro";
+import Currently from "~/components/Currently.astro";
+import CaseStudyCard from "~/components/CaseStudyCard.astro";
+import ArticleCard from "~/components/ArticleCard.astro";
+import { SITE } from "~/lib/meta.ts";
+
+const isProd = import.meta.env.PROD;
+
+const allCaseStudies = await getCollection("case-studies", ({ data }) =>
+  isProd ? !data.draft : true,
+);
+
+allCaseStudies.sort(
+  (a, b) =>
+    new Date(b.data.publishedAt).valueOf() -
+    new Date(a.data.publishedAt).valueOf(),
+);
+
+const allArticles = await getCollection("articles", ({ data }) =>
+  isProd ? !data.draft : true,
+);
+
+allArticles.sort(
+  (a, b) =>
+    new Date(b.data.publishedAt).valueOf() -
+    new Date(a.data.publishedAt).valueOf(),
+);
+
+const currentlyItems = [
+  "Backend lead at Evolute CX, focused on LLM-powered customer-experience features.",
+  "Open to Senior Backend / Tech Lead / AI Engineer roles, EU remote (CET ±2).",
+  "Reading: <em>Designing Data-Intensive Applications</em>, revisiting the chapters on consistency.",
+  "Tinkering: small AI side-tools and prompt scaffolds.",
+];
+
+const currentlyUpdated = "April 2026";
+---
+
+<BaseLayout>
+  <Hero />
+
+  <Currently items={currentlyItems} updated={currentlyUpdated} index="01" />
+
+  <section
+    id="case-studies"
+    class="py-12 sm:py-16 border-t border-[var(--color-rule)]"
+  >
+    <p class="eyebrow">02 / Work</p>
+    <h2 class="mt-3 text-2xl sm:text-[1.75rem] font-semibold tracking-tight">
+      Recent work
+    </h2>
+    <p class="mt-3 text-[var(--color-muted)] max-w-[60ch]">
+      Two pieces I'm happy to talk about in depth.
+    </p>
+
+    {allCaseStudies.length > 0 ? (
+      <div class="mt-8 grid gap-4 sm:grid-cols-2">
+        {allCaseStudies.map((cs) => (
+          <CaseStudyCard
+            href={`/case-studies/${cs.slug}/`}
+            title={cs.data.title}
+            summary={cs.data.summary}
+            tags={cs.data.tags}
+            readingTime={cs.data.readingTime}
+          />
+        ))}
+      </div>
+    ) : (
+      <p class="mt-6 text-[var(--color-muted)]">Coming soon.</p>
+    )}
+
+    {allCaseStudies.length > 0 && (
+      <p class="mt-8 text-sm">
+        <a href="/case-studies/" class="no-underline hover:underline text-[var(--color-muted)] hover:text-[var(--color-fg)]">
+          All case studies →
+        </a>
+      </p>
+    )}
+  </section>
+
+  {allArticles.length > 0 && (
+    <section
+      id="articles"
+      class="py-12 sm:py-16 border-t border-[var(--color-rule)]"
+    >
+      <p class="eyebrow">03 / Writing</p>
+      <h2 class="mt-3 text-2xl sm:text-[1.75rem] font-semibold tracking-tight">
+        Selected writing
+      </h2>
+      <p class="mt-3 text-[var(--color-muted)] max-w-[60ch]">
+        Occasional long-form notes. Not a blog.
+      </p>
+
+      <div class="mt-8 grid gap-4 sm:grid-cols-2">
+        {allArticles.map((a) => (
+          <ArticleCard
+            href={`/articles/${a.slug}/`}
+            title={a.data.title}
+            summary={a.data.summary}
+            readingTime={a.data.readingTime}
+          />
+        ))}
+      </div>
+
+      <p class="mt-8 text-sm">
+        <a href="/articles/" class="no-underline hover:underline text-[var(--color-muted)] hover:text-[var(--color-fg)]">
+          All writing →
+        </a>
+      </p>
+    </section>
+  )}
+
+  <section
+    id="contact"
+    class="py-12 sm:py-16 border-t border-[var(--color-rule)]"
+  >
+    <p class="eyebrow">{allArticles.length > 0 ? "04" : "03"} / Contact</p>
+    <h2 class="mt-3 text-2xl sm:text-[1.75rem] font-semibold tracking-tight">
+      Get in touch
+    </h2>
+    <p class="mt-3 text-[var(--color-fg)] leading-relaxed max-w-[62ch]">
+      For roles, collaborations, or just to say hi — email is the fastest way
+      to reach me.
+    </p>
+
+    <p class="mt-6">
+      <a
+        href={`mailto:${SITE.email}`}
+        class="text-xl sm:text-2xl font-medium tracking-tight break-all no-underline hover:underline decoration-[var(--color-rule-strong)] underline-offset-[6px]"
+      >
+        {SITE.email}
+      </a>
+    </p>
+
+    <ul class="mt-6 flex flex-wrap items-center gap-x-5 gap-y-2 text-sm text-[var(--color-muted)]">
+      <li>
+        <a href={SITE.linkedin} target="_blank" rel="noopener" class="no-underline hover:underline">
+          LinkedIn
+        </a>
+      </li>
+      <li aria-hidden="true" class="text-[var(--color-faint)]">·</li>
+      <li>
+        <a href={SITE.github} target="_blank" rel="noopener" class="no-underline hover:underline">
+          GitHub
+        </a>
+      </li>
+      <li aria-hidden="true" class="text-[var(--color-faint)]">·</li>
+      <li>
+        <a href={SITE.gitlab} target="_blank" rel="noopener" class="no-underline hover:underline">
+          GitLab
+        </a>
+      </li>
+    </ul>
+  </section>
+</BaseLayout>

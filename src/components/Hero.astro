@@ -1,0 +1,61 @@
+---
+import { SITE } from "~/lib/meta.ts";
+---
+
+<section class="pt-14 pb-12 sm:pt-20 sm:pb-16">
+  <h1 class="text-[2.25rem] leading-[1.05] sm:text-[3rem] font-semibold tracking-tight">
+    Reza Enayati
+  </h1>
+  <p class="mt-3 text-lg sm:text-xl text-[var(--color-muted)]">
+    Senior Backend Engineer
+    <span class="text-[var(--color-faint)]">·</span>
+    AI / LLM
+  </p>
+
+  <p class="mt-7 text-[var(--color-fg)] leading-relaxed max-w-[62ch]">
+    Senior backend engineer with 6+ years of production Node.js / TypeScript
+    experience, currently focused on shipping LLM-powered features end-to-end
+    at <a href="https://evolute.cx" target="_blank" rel="noopener">Evolute CX</a>.
+    I work across Azure OpenAI integrations, MongoDB performance, and
+    clean-architecture / DI-based services.
+  </p>
+
+  <div class="mt-8 flex flex-wrap items-center gap-3">
+    <a
+      href="#case-studies"
+      class="inline-flex items-center gap-2 px-4 py-2 rounded-md bg-[var(--color-fg)] text-[var(--color-bg)] no-underline border border-[var(--color-fg)] hover:bg-transparent hover:text-[var(--color-fg)] transition-colors"
+    >
+      Read case studies
+      <span aria-hidden="true">→</span>
+    </a>
+    <a
+      href="/cv.pdf"
+      class="inline-flex items-center gap-2 px-4 py-2 rounded-md text-[var(--color-fg)] no-underline border border-[var(--color-rule-strong)] hover:border-[var(--color-fg)] transition-colors"
+    >
+      Download CV
+      <span class="text-[var(--color-faint)]" aria-hidden="true">PDF</span>
+    </a>
+  </div>
+
+  <ul class="mt-7 flex flex-wrap items-center gap-x-5 gap-y-2 text-sm text-[var(--color-muted)]">
+    <li>
+      <a href={SITE.github} target="_blank" rel="noopener" class="no-underline hover:underline">
+        GitHub
+      </a>
+    </li>
+    <li aria-hidden="true" class="text-[var(--color-faint)]">·</li>
+    <li>
+      <a href={SITE.linkedin} target="_blank" rel="noopener" class="no-underline hover:underline">
+        LinkedIn
+      </a>
+    </li>
+    <li aria-hidden="true" class="text-[var(--color-faint)]">·</li>
+    <li>
+      <a href={`mailto:${SITE.email}`} class="no-underline hover:underline">
+        Email
+      </a>
+    </li>
+    <li aria-hidden="true" class="text-[var(--color-faint)]">·</li>
+    <li class="text-[var(--color-subtle)]">Remote · CET ±2 · Iran</li>
+  </ul>
+</section>

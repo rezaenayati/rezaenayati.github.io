@@ -1,0 +1,97 @@
+---
+title: "How a `$nin` query took down a hot read path"
+summary: "A B2B SaaS I work on saw router pools saturate and p95 pin at 30 seconds. The trigger was one query on one collection. The amplifiers were everywhere. This is the walkthrough."
+tags: ["MongoDB", "Performance", "Postmortem", "Backend"]
+publishedAt: "2026-04-21"
+updatedAt: "2026-04-21"
+readingTime: "8 min"
+draft: false
+---
+
+## TL;DR
+
+A single read path on a hot collection started timing out. The root cause was a query whose only filter was `field: { $nin: [...] }` — unindexable in the way it was used, and run against a collection that was now too large for COLLSCAN to be cheap. The amplifiers were a missing index, a serial fan-out per tenant, and a router pool with no real backpressure. The fix was three tiers: stop the bleed, harden the query, redesign the access pattern. The cheapest tier paid for itself in minutes.
+
+## What we saw
+
+The first signal was familiar and uninformative: client requests on one route timing out at the platform's 30-second cap. Then the noisier signals started arriving.
+
+- The MongoDB router (mongos) connection pool was saturated. New requests queued for tens of seconds before a connection was even available.
+- Server-side, the p95 on the affected route had been steadily climbing for weeks. We hadn't paged on it because the SLO was generous, and we were still inside it. Until we weren't.
+- CPU on the shard primaries that owned the hot collection was sustained at 80–95%.
+- The slow query log was full of one query, run hundreds of times per minute, against the same collection.
+
+So: not an outage caused by a deploy. Not a runaway worker. A normal request path that had stopped fitting in its budget.
+
+## Tracing the trigger
+
+The hot read path looked harmless. A user opens a list view; the API returns the items they're allowed to see. Internally, "allowed to see" was being computed by:
+
+1. Pulling all candidate documents from a hot collection (call it *items*).
+2. For each tenant the requesting user belonged to, doing a follow-up query to enrich the response.
+
+Two problems already, but neither was the headline. The headline was step 1.
+
+## Why the query was pathological
+
+The candidate-pull query, sanitized, looked roughly like this:
+
+```ts
+// The actual query in production. Names changed.
+const items = await db.collection("items").find({
+  status: "ACTIVE",
+  excludedTenantIds: { $nin: knownTenantIds },
+}).toArray();
+```
+
+Three things conspired:
+
+**1. `$nin` is not the inverse of `$in` from MongoDB's planner's point of view.** `$in` against an indexed field can use the index to seek directly to matching keys. `$nin` cannot, in the general case. The planner has to consider every document that *might* qualify, because the absence of a value isn't represented in the index in a usefully seekable way. With this filter shape on this field, the planner picked COLLSCAN.
+
+**2. The collection had grown.** When the query was first written, the collection was small enough that COLLSCAN was a few hundred milliseconds and nobody cared. By the time we incidented, it had crossed the threshold where a full scan was multiple seconds — multiplied by hundreds of concurrent calls.
+
+**3. `knownTenantIds` was usually small but occasionally huge.** When the array was small, the comparison was fast per document. When it was large (a power user belonging to many tenants), the per-document cost spiked. We were seeing both modes in the same five minutes.
+
+The COLLSCAN was visible in `db.collection.find(...).explain("executionStats")` — `winningPlan.stage: "COLLSCAN"`, `totalDocsExamined` equal to the collection size, `nReturned` two orders of magnitude smaller. Classic "we are paying to read everything to return almost nothing."
+
+## The amplifiers
+
+The query alone wasn't the only problem. Three amplifiers turned a pathological read into a router-saturating event.
+
+**Missing supporting index.** Even setting `$nin` aside, the `status` filter could have been doing real work — but no compound index existed that started with `status`. The first filterable field had no index at all. Adding even a partial index here would have cut the candidate set significantly before the `$nin` evaluation ran.
+
+**Serial fan-outs per tenant.** The enrichment step ran one query per tenant the user belonged to, awaited in a `for…of` loop. For users in 30 tenants, this was 30 sequential round trips per request. Trivially parallelizable, never parallelized. With the trigger query already starving the pool, these enrichment queries waited even longer for connections.
+
+**No connection hygiene on the calling service.** The calling service used a single shared driver instance, but had no upper bound on inflight Mongo operations. There was no semaphore, no per-route concurrency cap, no shed-load behavior on pool exhaustion. So when one request was slow, the next request just queued, and the next, until the router gave up on us.
+
+Any one of these would have been survivable. Together they were a feedback loop: slow query → exhausted pool → queued requests → more concurrent slow queries → more exhaustion.
+
+## The fix, laddered
+
+We treated this as three tiers, each with a different time horizon.
+
+**Tier 0 — Stop the bleed (deployed in < 30 minutes).**
+- Added a per-route concurrency cap on the calling service. Excess requests returned a `503` immediately instead of queueing for 30 seconds and then timing out. This alone restored router stability.
+- Added a hard cap on the size of `knownTenantIds`. Beyond N tenants, the path falls back to a "use the index, post-filter in app code" branch, with a logged warning. Ugly but safe.
+
+**Tier 1 — Harden the query (same week).**
+- Added a partial compound index over `(status, excludedTenantIds)` for `status: "ACTIVE"`. The planner could now seek to active items first; only the much smaller active-item set hit the `$nin` cost. `totalDocsExamined` dropped roughly an order of magnitude.
+- Rewrote the enrichment step to use `Promise.all` over the per-tenant queries. Wall-clock time on the enrichment dropped from "linear in number of tenants" to "max single query".
+- Added query timeouts at the driver level (`maxTimeMS`). A pathological query now fails the request in seconds instead of the platform's 30 — which keeps the pool turning over.
+
+**Tier 2 — Redesign the access pattern (next sprint).**
+- Replaced the "find candidates and exclude" model with "materialize the per-user view". A small worker keeps a `user_visible_items` collection up to date based on tenant membership and item status. The hot read path now does a single indexed seek by `userId`. No `$nin`. No fan-out.
+- The materialized view is rebuilt incrementally on item-status changes and on tenant membership changes. The first build was a one-off backfill.
+
+Tier 0 was the cheapest and gave us most of the recovery. Tier 2 was the most expensive and gave us a pattern we can reuse on the next list-view route, of which we have several.
+
+## What I'd take to the next system
+
+A few things have stuck with me from this:
+
+- **`$nin` is a smell, not a feature.** Whenever you write it, you are usually computing the complement of a set you could have computed positively. If the set is small enough that you'd write `$in`, it's small enough that you can probably invert your data model and avoid the negation entirely.
+- **Indexes are part of the API of a query.** A query without an index isn't a slow query — it's a query that doesn't scale. Code review should treat "you added a new query path" the same way it treats "you added a new endpoint": something that needs an explicit decision, not a default.
+- **Saturation is a downstream symptom; concurrency caps are an upstream one.** Pool saturation tells you the wrong thing — it tells you "I'm out of connections", not "the calling service is doing something pathological". Per-route concurrency caps make the misbehavior visible exactly where it originates.
+- **Slow queries don't page until they collide.** The p95 had been climbing for weeks. The right time to act on a steadily-rising p95 is while it's rising — not after it converges with the timeout cap. We've since added an explicit "p95 trend over 14 days" alert per top route.
+
+The code change that ultimately mattered most was the simplest one: a `Math.min(maxInflight, …)` and a `503` short-circuit in the calling service. Six lines. Saved the next outage.

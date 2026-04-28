@@ -1,0 +1,66 @@
+---
+import { getCollection } from "astro:content";
+import BaseLayout from "~/layouts/BaseLayout.astro";
+
+const isProd = import.meta.env.PROD;
+
+const studies = (
+  await getCollection("case-studies", ({ data }) =>
+    isProd ? !data.draft : true,
+  )
+).sort(
+  (a, b) =>
+    new Date(b.data.publishedAt).valueOf() -
+    new Date(a.data.publishedAt).valueOf(),
+);
+---
+
+<BaseLayout
+  title="Case studies"
+  description="In-depth engineering case studies by Reza Enayati — backend performance, LLM systems, and production lessons."
+>
+  <div class="pt-12 pb-8">
+    <p class="text-sm">
+      <a href="/" class="no-underline hover:underline text-[var(--color-muted)] hover:text-[var(--color-fg)]">
+        ← Home
+      </a>
+    </p>
+
+    <p class="eyebrow mt-8">Index</p>
+    <h1 class="mt-4 text-3xl sm:text-[2.5rem] leading-[1.1] font-semibold tracking-tight">
+      Case studies
+    </h1>
+    <p class="mt-4 text-[var(--color-muted)] max-w-[60ch]">
+      Engineering writeups in depth. Sanitized to remove anything customer- or
+      employer-specific.
+    </p>
+  </div>
+
+  {studies.length === 0 ? (
+    <p class="text-[var(--color-muted)]">Nothing published yet.</p>
+  ) : (
+    <ul class="border-t border-[var(--color-rule)]">
+      {studies.map((s) => (
+        <li class="border-b border-[var(--color-rule)]">
+          <a
+            href={`/case-studies/${s.slug}/`}
+            class="block py-6 no-underline group"
+          >
+            <p class="text-[0.7rem] font-medium tracking-[0.14em] uppercase text-[var(--color-faint)]">
+              {s.data.tags.slice(0, 3).join(" · ")}
+            </p>
+            <h2 class="mt-2 text-xl font-semibold text-[var(--color-fg)] group-hover:text-[var(--color-accent)] transition-colors">
+              {s.data.title}
+            </h2>
+            <p class="mt-2 text-[var(--color-muted)] leading-relaxed max-w-[62ch]">
+              {s.data.summary}
+            </p>
+            <p class="mt-3 text-xs text-[var(--color-subtle)]">
+              {s.data.readingTime} read
+            </p>
+          </a>
+        </li>
+      ))}
+    </ul>
+  )}
+</BaseLayout>

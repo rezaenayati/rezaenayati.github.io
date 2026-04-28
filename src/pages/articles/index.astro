@@ -1,0 +1,60 @@
+---
+import { getCollection } from "astro:content";
+import BaseLayout from "~/layouts/BaseLayout.astro";
+
+const isProd = import.meta.env.PROD;
+
+const articles = (
+  await getCollection("articles", ({ data }) => (isProd ? !data.draft : true))
+).sort(
+  (a, b) =>
+    new Date(b.data.publishedAt).valueOf() -
+    new Date(a.data.publishedAt).valueOf(),
+);
+---
+
+<BaseLayout
+  title="Writing"
+  description="Long-form notes by Reza Enayati. Not a blog."
+>
+  <div class="pt-12 pb-8">
+    <p class="text-sm">
+      <a href="/" class="no-underline hover:underline text-[var(--color-muted)] hover:text-[var(--color-fg)]">
+        ← Home
+      </a>
+    </p>
+
+    <p class="eyebrow mt-8">Index</p>
+    <h1 class="mt-4 text-3xl sm:text-[2.5rem] leading-[1.1] font-semibold tracking-tight">
+      Writing
+    </h1>
+    <p class="mt-4 text-[var(--color-muted)] max-w-[60ch]">
+      Occasional long-form notes. Not a blog.
+    </p>
+  </div>
+
+  {articles.length === 0 ? (
+    <p class="text-[var(--color-muted)]">Nothing here yet.</p>
+  ) : (
+    <ul class="border-t border-[var(--color-rule)]">
+      {articles.map((a) => (
+        <li class="border-b border-[var(--color-rule)]">
+          <a
+            href={`/articles/${a.slug}/`}
+            class="block py-6 no-underline group"
+          >
+            <h2 class="text-xl font-semibold text-[var(--color-fg)] group-hover:text-[var(--color-accent)] transition-colors">
+              {a.data.title}
+            </h2>
+            <p class="mt-2 text-[var(--color-muted)] leading-relaxed max-w-[62ch]">
+              {a.data.summary}
+            </p>
+            <p class="mt-3 text-xs text-[var(--color-subtle)]">
+              {a.data.readingTime} read
+            </p>
+          </a>
+        </li>
+      ))}
+    </ul>
+  )}
+</BaseLayout>

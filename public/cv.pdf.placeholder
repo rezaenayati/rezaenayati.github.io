@@ -1,0 +1,11 @@
+Replace this placeholder with the actual CV file at: public/cv.pdf
+
+After replacing:
+- The hero "Download CV (PDF)" button on the landing page links to /cv.pdf
+- /cv (route) redirects to /cv.pdf
+- This placeholder file can be deleted.
+
+The PDF should be:
+- Exported from your CV source (LaTeX, Pages, Word, Google Docs, etc.)
+- Reasonably small (< 500 KB ideally)
+- Named exactly `cv.pdf`

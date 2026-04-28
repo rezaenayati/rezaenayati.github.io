@@ -158,7 +158,7 @@ A single scrollable page with the following sections, in this order. No nav anim
 - Subhead, smaller weight: `Senior Backend Engineer · AI / LLM`
 - One paragraph (verbatim, as starting copy — adjust only if asked):
 
-  > Senior backend engineer with 6+ years of production Node.js / TypeScript experience, currently focused on shipping LLM-powered features end-to-end at [Evolute CX](https://evolute.cx). I work across Azure OpenAI integrations, MongoDB performance, and clean-architecture / DI-based services.
+  > Senior backend engineer with 6+ years of production Node.js / TypeScript experience, currently focused on shipping LLM-powered features end-to-end at [Evolute CX](https://evolute.app). I work across Azure OpenAI integrations, MongoDB performance, and clean-architecture / DI-based services.
 
 - Two buttons: `Read case studies` (anchors to #case-studies), `Download CV (PDF)` (links to `/cv.pdf`).
 - Inline icon links: GitHub, LinkedIn, Email.

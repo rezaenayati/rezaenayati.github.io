@@ -12,12 +12,12 @@
     <!-- Subhead -->
     <text x="80" y="320" font-size="34" font-weight="400" fill="#b0b0b0">
       Senior Backend Engineer
-      <tspan fill="#5e5e5e"> · </tspan>
+      <tspan fill="#5e5e5e"> &#xB7; </tspan>
       AI / LLM
     </text>
     <!-- Footer rule -->
     <line x1="80" y1="500" x2="1120" y2="500" stroke="#232325" stroke-width="1"/>
-    <text x="80" y="540" font-size="22" fill="#9aa6dc">6+ years · Node.js · TypeScript · MongoDB · Azure OpenAI</text>
-    <text x="1120" y="540" font-size="22" fill="#5e5e5e" text-anchor="end">Remote · CET ±2</text>
+    <text x="80" y="540" font-size="22" fill="#9aa6dc">6+ years &#xB7; Node.js &#xB7; TypeScript &#xB7; MongoDB &#xB7; Azure OpenAI</text>
+    <text x="1120" y="540" font-size="22" fill="#5e5e5e" text-anchor="end">Remote &#xB7; CET +2</text>
   </g>
 </svg>

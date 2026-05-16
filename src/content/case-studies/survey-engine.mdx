@@ -9,7 +9,7 @@ draft: false
 
 ## Background
 
-In working with SurveyJS on a potential change of course at Evolute, however, there was always one piece of functionality missing. SurveyJS did well what it needed to do: create form views and branch out based on logic, all done through JSON schemas and all inside the browser. The moment you got that submission, however, it was your responsibility.
+While evaluating SurveyJS for a new product at Evolute, one piece of the puzzle was always missing on our side. SurveyJS did well what it needed to do: render form views and branch on logic, all driven by JSON schemas, all inside the browser. The moment a submission came back, however, everything past that point was on you.
 
 Every single integration required similar capabilities: storage of schemas, versioning of said schemas so that editing a survey during submission doesn’t cause issues, partial save capability to let customers submit at a later time, analytics query generation, webhooks. While these may be individually simple, it's enough plumbing to turn it into its own project.
 
@@ -172,30 +172,106 @@ PATCH  /responses/:id              → updates answersJson, status → in_progre
 POST   /responses/:id/complete     → validates required fields, sets completedAt, fires webhook
 ```
 
-All the heavy lifting is done by the `complete` endpoint. This endpoint loads the pinned-to version and performs the validation of `answersJson` against the validator. If required questions are not present, then rejection with field-specific errors occurs:
+All the heavy lifting is done by the `complete` endpoint. It loads the pinned version, evaluates conditional logic against the current answers, and only validates the questions that logic considers visible — so a required question hidden by a `visibleIf` rule never blocks submission. If any visible required field is missing, the request is rejected with field-specific errors:
 
 ```typescript
 async complete(ctx: RequestContext, id: string): Promise<Response> {
   const response = await this.findOne(ctx, id);
-  const version = await this.versionRepository.findOne({ where: { id: response.surveyVersionId } });
+  const version = await this.versionRepository.findOne({
+    where: { id: response.surveyVersionId },
+  });
 
-  const validation = this.responseValidator.validate(
+  // Evaluate logic first so we know which questions are visible / required right now
+  const logic = this.logicEngine.evaluateLogic(
     version.schemaJson as unknown as SurveySchema,
+    version.logicJson as unknown as LogicSchema | null,
     response.answersJson,
   );
 
-  if (!validation.valid) {
-    throw new BadRequestException({ message: 'Validation failed', errors: validation.errors });
+  const validation = this.responseValidator.validateResponse(
+    version.schemaJson,
+    response.answersJson,
+    { validateRequired: true, partialValidation: false },
+  );
+
+  // Drop errors for questions that aren't visible under the current logic state
+  const visibleErrors = validation.errors.filter((e) =>
+    logic.visibleQuestions.includes(e.path.split('.')[0]),
+  );
+  const missingRequired = logic.requiredQuestions.filter((qId) => {
+    const a = response.answersJson[qId];
+    return a === undefined || a === null || a === '';
+  });
+
+  if (visibleErrors.length > 0 || missingRequired.length > 0) {
+    throw new BadRequestException({
+      message: 'Response validation failed',
+      errors: visibleErrors,
+      missingRequired,
+    });
   }
 
   response.status = ResponseStatus.COMPLETED;
   response.completedAt = new Date();
   const saved = await this.responseRepository.save(response);
 
-  this.webhookService.fire(survey.settings, { event: 'response.completed', ... });
+  const survey = await this.surveysService.findOne(ctx, saved.surveyId);
+  this.webhookService.fire(survey.settings, {
+    event: 'response.completed',
+    timestamp: new Date().toISOString(),
+    surveyId: saved.surveyId,
+    responseId: saved.id,
+    respondentId: saved.respondentId,
+    answersJson: saved.answersJson,
+  });
   return saved;
 }
 ```
+
+---
+
+## File Uploads
+
+SurveyJS supports `file` questions, and the obvious thing — base64-encoding files into `answersJson` — falls apart almost immediately: response rows balloon, JSONB indexes become useless, and a 25 MB upload turns into a 33 MB row. Survey Engine handles file questions as a separate resource instead.
+
+The lifecycle is two steps. The client uploads the file to `POST /files`, which streams the bytes to a configurable storage driver and writes an `uploaded_files` row with the file metadata and a `storageKey`. The response carries an `{ id, originalName, mimeType, size, url }` envelope that the client then drops into the corresponding file question's answer:
+
+```typescript
+const uploaded = await client.files.upload(file, {
+  surveyId: survey.id,
+  questionId: 'attachment',
+  filename: file.name,
+});
+
+await client.responses.update(response.id, {
+  answersJson: {
+    attachment: {
+      fileId: uploaded.id,
+      originalName: uploaded.originalName,
+      mimeType: uploaded.mimeType,
+      size: uploaded.size,
+      url: uploaded.url,
+    },
+  },
+});
+```
+
+Storage is pluggable via a `FileStorage` interface. Three drivers ship in the box — `LocalFileStorage` (filesystem, default for dev), `S3FileStorage` (any S3-compatible bucket, including MinIO and R2 via `S3_ENDPOINT`), and `FirebaseFileStorage`. The driver is picked at boot from `FILE_STORAGE_DRIVER`:
+
+```typescript
+{
+  provide: FILE_STORAGE,
+  inject: [ConfigService],
+  useFactory: (config: ConfigService) => {
+    const driver = config.get<string>('FILE_STORAGE_DRIVER');
+    if (driver === 's3') return new S3FileStorage(config);
+    if (driver === 'firebase') return new FirebaseFileStorage(config);
+    return new LocalFileStorage(config);
+  },
+}
+```
+
+When the upload call includes `surveyId` and `questionId`, the service loads the active version of that survey and applies the per-question rules baked into the schema — `allowedFileTypes` (MIME globs like `image/*` or extensions like `.pdf`) and `maxFileSize`. So the survey author can say "this question accepts images under 5 MB" right inside the SurveyJS JSON, and the engine enforces it on the server without the client needing to be trusted. Downloads go back through `GET /files/:id`, which streams from the same driver and applies the same ownership check used everywhere else.
 
 ---
 
@@ -231,14 +307,16 @@ for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
 }
 ```
 
-Every request has an HMAC-SHA256 signature included as part of the header information in `X-Survey-Engine-Signature: sha256=<hex>.` The key used for signing can either be per-survey in `settings.webhookSecret` or globally defined in the environment `WEBHOOK_SECRET`. The validation process is simple `
+Every request carries an HMAC-SHA256 signature in `X-Survey-Engine-Signature: sha256=<hex>`. The signing key is either per-survey (`settings.webhookSecret`) or a global `WEBHOOK_SECRET` env var. Verification is a few lines on the receiver side — note the explicit length check, because `timingSafeEqual` throws when its inputs have different lengths and a caller can trivially supply a short signature:
 
 ```typescript
 import { createHmac, timingSafeEqual } from 'crypto';
 
 function verifySignature(body: string, signature: string, secret: string): boolean {
   const expected = `sha256=${createHmac('sha256', secret).update(body).digest('hex')}`;
-  return timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
+  const a = Buffer.from(signature);
+  const b = Buffer.from(expected);
+  return a.length === b.length && timingSafeEqual(a, b);
 }
 ```
 
@@ -246,18 +324,16 @@ function verifySignature(body: string, signature: string, secret: string): boole
 
 ## Analytics
 
-The analytics module works exclusively on the `responses` table employing PostgreSQL's aggregate functions. The structure is designed in three modules: `AggregationService` (summary statistics, funnel analysis, trends), `QuestionAnalyticsService` (per question statistics by employing response data), and `ExportService` (conversion to CSV). `AnalyticsService` is a thin layer over the other three.
+The analytics module works exclusively on the `responses` table, leaning on PostgreSQL's aggregate functions instead of pulling rows into Node and looping. It splits into three services: `AggregationService` (summary statistics, funnel analysis, trends), `QuestionAnalyticsService` (per-question stats), and `ExportService` (CSV conversion). `AnalyticsService` is a thin facade over the other three.
 
-**Summary** leverages `COUNT(*) FILTER (WHERE ...)` and `PERCENTILE_CONT` in one round trip query:
+**Summary** is computed in a small set of round-trip queries — one main aggregate using `COUNT(*) FILTER (WHERE ...)`, a separate `PERCENTILE_CONT` query for the median, a status-count `GROUP BY`, and a "today / this week" period query. Keeping median out of the main aggregate is a wart left from how the base query gets reused for funnel/trends; collapsing it into the same SELECT is on the to-do list. The main aggregate:
 
 ```sql
 SELECT
   COUNT(*)::int                                                      AS total,
   COUNT(*) FILTER (WHERE status = 'completed')::int                 AS completed,
   AVG(EXTRACT(EPOCH FROM (completedAt - startedAt)))
-    FILTER (WHERE status = 'completed' AND completedAt IS NOT NULL) AS avg_time,
-  PERCENTILE_CONT(0.5) WITHIN GROUP
-    (ORDER BY EXTRACT(EPOCH FROM (completedAt - startedAt)))        AS median_time
+    FILTER (WHERE status = 'completed' AND completedAt IS NOT NULL) AS avg_time
 FROM responses
 WHERE surveyId = $1
 ```
@@ -318,10 +394,13 @@ AppModule
 │   ├── SurveysModule
 │   ├── SchemaModule
 │   └── WebhooksModule
+├── FilesModule           (UploadedFile entity, FilesService, pluggable storage driver)
+│   └── SurveysModule
 ├── AnalyticsModule       (facade + AggregationService + QuestionAnalyticsService + ExportService)
 │   ├── SurveysModule
 │   └── ResponsesModule
-└── WebhooksModule        (WebhookService)
+├── WebhooksModule        (WebhookService)
+└── HealthModule          (liveness + DB-readiness probes)
 ```
 
 `SurveysModule` exposes `SurveysService` and the `Survey`/`SurveyVersion` repositories for use in other modules without having to re-expose the entities. `SchemaModule` exposes both services for use in surveys when they are published and responses when they are completed.
@@ -330,24 +409,31 @@ AppModule
 
 ## Testing
 
-Integration tests use [Testcontainers](https://node.testcontainers.org/) to spin up a real PostgreSQL instance per test suite:
+Integration tests use [Testcontainers](https://node.testcontainers.org/) to spin up a real PostgreSQL instance per suite, then build a `DataSource` against it. The helper that the integration suites share:
 
 ```typescript
-beforeAll(async () => {
+export async function startTestDatabase() {
   container = await new PostgreSqlContainer('postgres:16-alpine')
     .withDatabase('survey_engine_test')
+    .withUsername('test')
+    .withPassword('test')
     .start();
 
-  app = await Test.createTestingModule({ imports: [AppModule] })
-    .overrideModule(TypeOrmModule)
-    .useModule(TypeOrmModule.forRoot({
-      type: 'postgres',
-      url: container.getConnectionUri(),
-      entities: [path.join(process.cwd(), 'src/**/*.entity{.ts,.js}')],
-      synchronize: true,
-    }))
-    .compile();
-}, 60_000);
+  dataSource = new DataSource({
+    type: 'postgres',
+    host: container.getHost(),
+    port: container.getPort(),
+    username: container.getUsername(),
+    password: container.getPassword(),
+    database: container.getDatabase(),
+    entities: [Survey, SurveyVersion, Response],
+    synchronize: true,
+    logging: false,
+  });
+
+  await dataSource.initialize();
+  return { /* connection info handed to the Nest TestingModule */ };
+}
 ```
 
 This will enable you to run actual SQL queries and enforce actual constraints, not mocked repositories. The unit tests handle the logic in services, such as ownership validation, pagination calculations, analytics calculations, and web hook filtering, using Jest mocks.
@@ -360,21 +446,29 @@ The repo ships with a `docker-compose.yml` that runs the service and PostgreSQL 
 
 ```yaml
 services:
-  survey-engine:
-    build: .
+  postgres:
+    image: postgres:16-alpine
     environment:
-      DATABASE_URL: postgres://postgres:postgres@db:5432/survey_engine
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: survey_engine
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+
+  survey-engine:
+    build: { context: ., dockerfile: Dockerfile }
+    environment:
       NODE_ENV: production
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_NAME: survey_engine
     ports:
       - "3000:3000"
     depends_on:
-      db:
+      postgres:
         condition: service_healthy
-
-  db:
-    image: postgres:16-alpine
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
 ```
 
 When the service is started in production mode (`NODE_ENV=production`), `synchronize` is turned off, and the value of `migrationsRun` is set to `true`, thereby executing the migration scripts located in `src/database/migrations/`.
@@ -408,7 +502,7 @@ const analytics = await client.surveys.getAnalytics(survey.id, { versionMode: 'c
 // analytics.summary.completionRate, analytics.questions[0].choices, etc.
 ```
 
-The SDK is a local `file:../../sdk` dependency in the example. The plan is to publish it to npm as `@survey-engine/sdk` once the API is stable.
+The SDK is published on npm as [`survey-engine-sdk`](https://www.npmjs.com/package/survey-engine-sdk) — `npm install survey-engine-sdk` and the types come with it. The example app in this repo links it via `file:../../sdk` during development so SDK changes show up without a publish cycle.
 
 ---
 

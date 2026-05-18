@@ -2,8 +2,8 @@
 title: "Building the backend half of surveys"
 summary: "While looking into SurveyJS for a new product at Evolute, I kept encountering the same missing features: versioning, partial saves, analytics, and webhooks. I created it as a standalone open-source NestJS service."
 tags: ["NestJS", "TypeScript", "PostgreSQL", "Open Source"]
-publishedAt: "2026-05-16"
-readingTime: "10 min"
+publishedAt: "2026-05-18"
+readingTime: "12 min"
 draft: false
 ---
 
@@ -160,6 +160,8 @@ This is the logic behind POST /surveys/:id/publish:
 
 When a participant enters the survey ("GET /surveys/:id/runtime"), then he receives a schema from `activeVersion`. During creating his own response, a response entry is created which has `surveyVersionId = activeVersionId`. The later changes in the draft won’t affect version entries. The participant will work with an old schema till completion of the survey.
 
+`POST /surveys/:id/duplicate` completes the list of functions that can be executed at the level of surveys. This call duplicates `draftSchemaJson`, `draftLogicJson`, and `settings`. In addition, a suffix `(copy)` is added to the name, and a new draft survey with zero versions and responses is generated. The copied survey is owned by the current user (or is anonymous in case there is no user id).
+
 ---
 
 ## Response Lifecycle
@@ -167,9 +169,9 @@ When a participant enters the survey ("GET /surveys/:id/runtime"), then he recei
 Three endpoints handle the full lifecycle:
 
 ```
-POST   /responses                  → creates row, status = started, fires webhook
+POST   /responses                  → creates row, status = started, enqueues webhook
 PATCH  /responses/:id              → updates answersJson, status → in_progress
-POST   /responses/:id/complete     → validates required fields, sets completedAt, fires webhook
+POST   /responses/:id/complete     → validates required fields, sets completedAt, enqueues webhook
 ```
 
 All the heavy lifting is done by the `complete` endpoint. It loads the pinned version, evaluates conditional logic against the current answers, and only validates the questions that logic considers visible — so a required question hidden by a `visibleIf` rule never blocks submission. If any visible required field is missing, the request is rejected with field-specific errors:
@@ -177,6 +179,8 @@ All the heavy lifting is done by the `complete` endpoint. It loads the pinned ve
 ```typescript
 async complete(ctx: RequestContext, id: string): Promise<Response> {
   const response = await this.findOne(ctx, id);
+  this.assertRespondent(response, ctx);
+
   const version = await this.versionRepository.findOne({
     where: { id: response.surveyVersionId },
   });
@@ -205,6 +209,7 @@ async complete(ctx: RequestContext, id: string): Promise<Response> {
 
   if (visibleErrors.length > 0 || missingRequired.length > 0) {
     throw new BadRequestException({
+      code: ErrorCodes.VALIDATION_FAILED,
       message: 'Response validation failed',
       errors: visibleErrors,
       missingRequired,
@@ -213,20 +218,26 @@ async complete(ctx: RequestContext, id: string): Promise<Response> {
 
   response.status = ResponseStatus.COMPLETED;
   response.completedAt = new Date();
-  const saved = await this.responseRepository.save(response);
 
-  const survey = await this.surveysService.findOne(ctx, saved.surveyId);
-  this.webhookService.fire(survey.settings, {
-    event: 'response.completed',
-    timestamp: new Date().toISOString(),
-    surveyId: saved.surveyId,
-    responseId: saved.id,
-    respondentId: saved.respondentId,
-    answersJson: saved.answersJson,
+  const survey = await this.surveysService.findOne(ctx, response.surveyId);
+
+  // Commit completion + outbox row together — see the Webhooks section
+  return this.dataSource.transaction(async (manager) => {
+    const persisted = await manager.save(Response, response);
+    await this.webhookService.enqueue(manager, survey.settings, {
+      event: 'response.completed',
+      timestamp: new Date().toISOString(),
+      surveyId: persisted.surveyId,
+      responseId: persisted.id,
+      respondentId: persisted.respondentId,
+      answersJson: persisted.answersJson,
+    });
+    return persisted;
   });
-  return saved;
 }
 ```
+
+One interesting aspect of the logic engine is that string comparison using `EQUALS` and `CONTAINS` will be case-sensitive by default, meaning that `"Yes" === "yes"` will be evaluated to false, just like for `STARTS_WITH`, `ENDS_WITH`, and `MATCHES`. For those who were depending on case-insensitive comparisons in their surveys, it is possible to revert back to the old way with `logicJson.globalSettings.caseSensitiveStringComparison = false`.
 
 ---
 
@@ -277,37 +288,75 @@ When the upload call includes `surveyId` and `questionId`, the service loads the
 
 ## Webhooks
 
-Webhooks use the fire-and-forget model for their deliveries. Although the `fire()` function is invoked synchronously, the return value is never awaited, meaning it happens asynchronously without affecting the HTTP request that initiated the call.
+Webhooks use an outbox approach. The delivery is persisted in a `webhook_deliveries` table during the same transaction as when mutating the response’s state; then, it’s consumed by the worker in an asynchronous fashion. Committing both the outbox entry and response state mutation ensures at least one delivery; if there’s a failure between saving the response and posting the webhook, there will be a `PENDING` entry for the next worker tick.
+
+The enqueue method requires the `EntityManager` instance from the caller’s context to commit the outbox entry within the same transaction as the response:
 
 ```typescript
-fire(settings: SurveySettings, payload: WebhookPayload): void {
+async enqueue(
+  manager: EntityManager,
+  settings: SurveySettings,
+  payload: WebhookPayload,
+): Promise<void> {
   if (!settings.webhookUrl) return;
-
   const allowedEvents = settings.webhookEvents ?? DEFAULT_EVENTS;
   if (!allowedEvents.includes(payload.event)) return;
 
-  // Intentionally not awaited — delivery is best-effort
-  void this.deliver(settings.webhookUrl, payload, secret);
+  const delivery = manager.create(WebhookDelivery, {
+    event: payload.event,
+    surveyId: payload.surveyId,
+    responseId: payload.responseId,
+    respondentId: payload.respondentId,
+    url: settings.webhookUrl,
+    secret: settings.webhookSecret ?? this.globalSecret ?? null,
+    payload,
+    status: WebhookDeliveryStatus.PENDING,
+    attempts: 0,
+    nextAttemptAt: new Date(),
+  });
+  await manager.save(WebhookDelivery, delivery);
 }
 ```
 
-The `deliver` method retries up to 3 times with exponential backoff (1s, 2s, 4s) and aborts each attempt after 10 seconds:
+The response handler wraps the save and the enqueue in one transaction:
 
 ```typescript
-for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS); // 10s
-  try {
-    const res = await fetch(url, { method: 'POST', headers, body, signal: controller.signal });
-    if (res.ok) return; // success
-  } finally {
-    clearTimeout(timer);
-  }
-  if (attempt < MAX_RETRIES) await sleep(BASE_DELAY_MS * 2 ** (attempt - 1)); // 1s, 2s, 4s
+const completed = await this.dataSource.transaction(async (manager) => {
+  const persisted = await manager.save(Response, response);
+  await this.webhookService.enqueue(manager, survey.settings, {
+    event: 'response.completed',
+    timestamp: new Date().toISOString(),
+    surveyId: persisted.surveyId,
+    responseId: persisted.id,
+    respondentId: persisted.respondentId,
+    answersJson: persisted.answersJson,
+  });
+  return persisted;
+});
+```
+
+The `WebhookDispatcherService` is timed using a configurable delay (@nestjs/schedule; default is 1 sec.). On each timeout, the service locks a batch of rows that are due to be dispatched using the `FOR UPDATE SKIP LOCKED` clause, meaning that the service can safely operate in parallel with other engines without duplicate POSTs of the same row;
+
+```typescript
+private async lockBatch(): Promise<string[]> {
+  return this.dataSource.transaction(async (manager) => {
+    const rows = await manager
+      .createQueryBuilder(WebhookDelivery, 'd')
+      .setLock('pessimistic_write')
+      .setOnLocked('skip_locked')
+      .where('d.status = :status', { status: WebhookDeliveryStatus.PENDING })
+      .andWhere('d.nextAttemptAt <= :now', { now: new Date() })
+      .orderBy('d.nextAttemptAt', 'ASC')
+      .limit(this.batchSize)
+      .getMany();
+    return rows.map((r) => r.id);
+  });
 }
 ```
 
-Every request carries an HMAC-SHA256 signature in `X-Survey-Engine-Signature: sha256=<hex>`. The signing key is either per-survey (`settings.webhookSecret`) or a global `WEBHOOK_SECRET` env var. Verification is a few lines on the receiver side — note the explicit length check, because `timingSafeEqual` throws when its inputs have different lengths and a caller can trivially supply a short signature:
+Because the locking transaction ends before the HTTP request, a slow `fetch` does not keep the row-level lock locked. Successful requests update `status = 'delivered'`. Failed ones increment `attempts`, save `lastError`, and schedule `nextAttemptAt = now + 2^(attempts - 1) seconds`—exponential backoff (1s, 2s, 4s) written to the database rather than stored in memory and timed out by a `setTimeout`. Once there have been `WEBHOOK_MAX_ATTEMPTS` consecutive failures (default 3), the status changes to `status = 'failed'` and the retries stop. The individual timeout remains 10 seconds and is enforced with `AbortController`.
+
+Every single request is signed with `X-Survey-Engine-Signature: sha256=<hex>` computed on either the per-survey `settings.webhookSecret` or the global `WEBHOOK_SECRET` (which ever was saved in the row when enqueuing that delivery, making it possible to rotate secrets without breaking previously queued deliveries). The receiving side must do a separate length check on the signatures, because `timingSafeEqual` will throw if its arguments are of different lengths, and a caller can easily provide a short one.
 
 ```typescript
 import { createHmac, timingSafeEqual } from 'crypto';
@@ -320,23 +369,29 @@ function verifySignature(body: string, signature: string, secret: string): boole
 }
 ```
 
+The tunables reside below the environment variables: WEBHOOK_POLL_INTERVAL_MS (1000), WEBHOOK_MAX_ATTEMPTS (3), WEBHOOK_BATCH_SIZE (10), WEBHOOK_FETCH_TIMEOUT_MS (10000), and WEBHOOK_DISPATCHER_ENABLED (set to `false` if you want to continue writing outbox rows but drain using another process;
+
 ---
 
 ## Analytics
 
 The analytics module works exclusively on the `responses` table, leaning on PostgreSQL's aggregate functions instead of pulling rows into Node and looping. It splits into three services: `AggregationService` (summary statistics, funnel analysis, trends), `QuestionAnalyticsService` (per-question stats), and `ExportService` (CSV conversion). `AnalyticsService` is a thin facade over the other three.
 
-**Summary** is computed in a small set of round-trip queries — one main aggregate using `COUNT(*) FILTER (WHERE ...)`, a separate `PERCENTILE_CONT` query for the median, a status-count `GROUP BY`, and a "today / this week" period query. Keeping median out of the main aggregate is a wart left from how the base query gets reused for funnel/trends; collapsing it into the same SELECT is on the to-do list. The main aggregate:
+**Summary** is calculated using only three round-trip SQL queries, namely the main aggregate query fetching the total, finished, average time, and median time together; a status count `GROUP BY` query; and the query for "today / this week." In Postgres, the `FILTER` clause can be applied to the `PERCENTILE_CONT` ordered-set aggregate function, which means that the calculation of the median time can be done within the same SELECT statement as the counters and average time:
 
 ```sql
 SELECT
-  COUNT(*)::int                                                      AS total,
-  COUNT(*) FILTER (WHERE status = 'completed')::int                 AS completed,
+  COUNT(*)::int                                                          AS total,
+  COUNT(*) FILTER (WHERE status = 'completed')::int                      AS completed,
   AVG(EXTRACT(EPOCH FROM (completedAt - startedAt)))
-    FILTER (WHERE status = 'completed' AND completedAt IS NOT NULL) AS avg_time
+    FILTER (WHERE status = 'completed' AND completedAt IS NOT NULL)      AS avg_time,
+  PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (completedAt - startedAt)))
+    FILTER (WHERE status = 'completed' AND completedAt IS NOT NULL)      AS median_time
 FROM responses
 WHERE surveyId = $1
 ```
+
+All searches for `ResponseStatus` use bound variables (`:statusCompleted`, `:statusStarted`, and so forth), instead of string interpolation; thus, the enumerated values get validated by the driver, and adding another status value won’t provide any foothold for SQL injection attacks.
 
 **Trends** groups by day and week using `DATE_TRUNC` and `TO_CHAR`:
 
@@ -366,19 +421,51 @@ qb.andWhere(`("r"."answersJson"->>:qid)::numeric > :value`, { qid: filter.questi
 
 ---
 
-## Identity Without Authentication
+## Identity and trust
 
-There’s no authentication layer for Survey Engine. The engine looks for `X-User-ID` in the request header and saves it as `createdBy` for surveys and `respondentId` for responses. The ownership verification logic runs if the user ID exists. That means the service compares the `createdBy` field of the resource and `userId` of the request. If those two IDs aren’t the same and both exist, the service returns `403 Forbidden`. If any of them is null, the ownership verification doesn’t run.
+Survey Engine does not come bundled with an identity provider; you must authenticate the client yourself before forwarding their user ID. Four methods exist for doing so, ranging from the least to most trusted by Survey Engine regarding the validity of the claimed user ID.
+
+**Trusted gateway (default)**. The engine takes the value of `X-User-ID` in the request header, storing it under `createdBy` in the survey and `respondentId` in the response. Because there is no verification of authenticity, this is only recommended if there is a trusted layer outside of the engine, e.g., your own gateway, and the engine is only accessible via said gateway. Anything that can access the port may claim any value for `X-User-ID`.
+
+**API key**. If `API_KEY` is defined, it becomes necessary for all requests (excluding the health check) to include a bearer API key in either the `Authorization` or `X-API-Key` header.
+
+**Strict auth.** Enabling `STRICT_AUTH` together with `API_KEY` closes the possibility of "anonymously calling `X-User-ID:` and then being that user": both `X-User-ID` checks and the presence of `API_KEY` should succeed, and any mutation operations on anonymous resources aren't allowed. In case of a faulty deployment setup, the service will fail closed rather than silently allowing attackers to authenticate as legitimate users.
+
+**User-signed tokens.** Providing `USER_TOKEN_SECRET` causes the engine to validate an HS256-signed JWT passed in `X-User-Token` whose subject claim corresponds to the user ID. This allows us to delegate validation to the engine, which now doesn't have to rely on the caller's identity claim but can verify the token's cryptographic signature directly. When combined with `STRICT_AUTH`, plain `X-User-ID` authentication is completely disallowed.
+
+In order to separate concerns, the former functionality is encapsulated in `ApiKeyGuard`, while the latter in `UserAuthGuard`. Both guards respond to `@SkipApiKey` decorator, but skip health checks. `GetContext` takes precedence over `X-User-ID` whenever there is a validated token and `verifiedUserId` property is set on a successfull authorization attempt.
+
+After resolving identity, any mutation calls follow hybrid ownership rules. For identified assets (`createdBy` is set), it’s a perfect match; anonymous assets (`createdBy` is null) can be mutated by anyone, until `STRICT_AUTH` changes that also:
 
 ```typescript
-private assertOwner(resource: { createdBy: string | null }, ctx: RequestContext): void {
-  if (resource.createdBy && ctx.userId && resource.createdBy !== ctx.userId) {
-    throw new ForbiddenException('You do not have access to this resource');
+assertOwner(survey: Survey, ctx: RequestContext): void {
+  if (survey.createdBy) {
+    if (!ctx.userId || survey.createdBy !== ctx.userId) {
+      throw new ForbiddenException({
+        code: ErrorCodes.FORBIDDEN,
+        message: 'You do not have access to this survey',
+      });
+    }
+    return;
+  }
+  if (this.strictAuth) {
+    throw new ForbiddenException({
+      code: ErrorCodes.STRICT_AUTH_VIOLATION,
+      message: 'Mutating anonymous surveys is disabled in strict mode',
+    });
   }
 }
 ```
 
-Deployments that would like service-to-service authentication (like not having people accessing the survey engine directly via a browser) can enable the `API_KEY` security check. Add your `API_KEY` to your deployment environment variables, and each call will need to provide it in the header, either `Authorization: Bearer <key>` or `X-API-Key: <key>`.
+That shape persists in `ResponsesService.assertRespondent` with respect to `respondentId`. The older "if both IDs are there and not equal, return 403; else proceed" approach allowed an anonymous caller to modify a resource belonging to a user — the hybrid approach rectifies this without compromising the anonymous-resource paradigm upon which the no-auth deployment model depends.
+
+`GET /surveys/:id` is wrapped in an extra visibility check on top of ownership: drafts and archived surveys are visible only to their owner, and a non-owner asking for someone else's draft gets a `404` — same response as a non-existent ID, so the endpoint can't be used to enumerate draft UUIDs.
+
+---
+
+## Error codes
+
+The response body for each error contains a machine-parsable `code`, in addition to `statusCode` and `message`. Instead of the earlier "substring-matching" `deriveCode` tower that would attempt to guess the type of error based on its English description, an `ErrorCodes` registry (`SURVEY_NOT_FOUND`, `RESPONSE_ALREADY_COMPLETED`, `FORBIDDEN`, `INVALID_SCHEMA`, `INVALID_USER_TOKEN`, `STRICT_AUTH_VIOLATION`, `FILE_TOO_LARGE`, `FILE_TYPE_NOT_ALLOWED`, `RATE_LIMITED`, and many more) provides a single source of truth. Clients can switch on the code without having to parse any text, and this is exposed by the SDK via `SurveyEngineError.code`. There is also a `codeForStatus(status)` fallback for uncodeed exceptions thrown out of the box.
 
 ---
 
@@ -399,7 +486,7 @@ AppModule
 ├── AnalyticsModule       (facade + AggregationService + QuestionAnalyticsService + ExportService)
 │   ├── SurveysModule
 │   └── ResponsesModule
-├── WebhooksModule        (WebhookService)
+├── WebhooksModule        (WebhookDelivery entity, WebhookService, WebhookDispatcherService)
 └── HealthModule          (liveness + DB-readiness probes)
 ```
 
@@ -464,6 +551,7 @@ services:
       DB_USER: postgres
       DB_PASSWORD: postgres
       DB_NAME: survey_engine
+      DB_SYNCHRONIZE: "false"  # explicit opt-in; migrations run on startup
     ports:
       - "3000:3000"
     depends_on:
@@ -471,11 +559,11 @@ services:
         condition: service_healthy
 ```
 
-When the service is started in production mode (`NODE_ENV=production`), `synchronize` is turned off, and the value of `migrationsRun` is set to `true`, thereby executing the migration scripts located in `src/database/migrations/`.
+Schema management is explicit: if `DB_SYNCHRONIZE=true`, use TypeORM’s `synchronize` (auto-schema synchronization via entities). Else, all migration scripts under `src/database/migrations/` will be executed at startup. Environment variable `NODE_ENV` is no longer involved in this process; it now influences log verbosity only. Old-fashioned approach was `synchronize: NODE_ENV !== 'production'`, which caused all other possible values for `NODE_ENV` to trigger automatic schema syncing with an actual database – an unwanted situation we got rid of by requiring an opt-in. `.env` file for local development contains `DB_SYNCHRONIZE=true`.
 
-But when the service runs in development mode, `synchronize` is enabled, while migrations are bypassed.
+But the CREATE TYPE gotcha definitely is worth mentioning. If you've been working with your application in `DB_SYNCHRONIZE=true` mode and you bootstrapped your database with some pre-existing enums, but you switch to migrations, then the very first migration attempt will fail because the types are going to be created twice. Possible solutions would be to use a fresh database or remove the pre-existing enums manually.
 
-However, be aware that when switching from development mode to production mode, if you initially started the service in development mode (which generated the schema using `synchronize`), the very first execution of migrations will try to execute the command `CREATE TYPE` on enums that have already been created.
+Each reply will have an `X-Request-ID` header. The middleware parses it once per each request by either using the incoming `X-Correlation-ID` header that the caller may provide (which means you’ll be able to correlate requests not only through the gateway and engine but also your services) or by parsing a randomly generated UUID. The parsed value becomes the truth going forward: logs, errors, and `RequestContext` will all take the value from this one place.
 
 ---
 
@@ -486,8 +574,9 @@ The repo includes a typed SDK in `sdk/` that wraps all endpoints:
 ```typescript
 const client = new SurveyEngineClient({
   baseUrl: 'https://surveys.your-domain.com',
-  userId: req.user.id,  // your resolved user ID
-  apiKey: process.env.SURVEY_ENGINE_API_KEY,  // optional
+  userId: req.user.id,                              // sent as X-User-ID
+  userToken: mintHs256Jwt({ sub: req.user.id }),    // optional; sent as X-User-Token
+  apiKey: process.env.SURVEY_ENGINE_API_KEY,        // optional
 });
 
 // All return types are fully typed
@@ -508,11 +597,9 @@ The SDK is published on npm as [`survey-engine-sdk`](https://www.npmjs.com/packa
 
 ## What's Missing
 
-There are a couple of things I chose not to include in v1:
+There are a couple of things I'm holding for the next horizon:
 
-**Webhook delivery logs** — delivery attempts are logged through Pino, but no logs exist for delivery history. When there's trouble delivering webhooks, you'd have to troubleshoot from the logs. Adding a `webhook_deliveries` table would solve this problem for v1.1.
-
-**Response export** — you can use the API to query responses by filtering survey, status, date range, and answer values, but there's no `/export` endpoint where a dump in CSV or NDJSON format gets streamed back. The `ExportService` includes a `convertToCSV` method; it's just not hooked up to an HTTP endpoint yet.
+**A read endpoint for webhook deliveries** – all webhook deliveries are now stored in `webhook_deliveries` table with `attempts`, `last_response_status`, and `last_error`, so all the info you need is available. What is missing here is a `GET /webhook-deliveries` endpoint (filtered by survey, response, and status) exposing rows through the API. At the moment, you have no choice but to access the table directly via DB queries.
 
 **Survey access tokens** — the schema contains `settings.accessTokenRequired`, but the actual implementation is missing. This would enable some deployments to require an access token when inviting participants.
 
